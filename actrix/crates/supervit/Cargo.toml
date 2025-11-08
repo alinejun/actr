@@ -1,0 +1,58 @@
+[package]
+name = "supervit"
+version = "0.1.0"
+edition = "2021"
+description = "gRPC-based supervisor client for actrix nodes"
+
+[dependencies]
+# gRPC (tonic 0.14 uses prost 0.14)
+tonic = { version = "0.14", features = ["tls-ring"] }
+tonic-prost = "0.14"
+prost = { workspace = true }
+prost-types = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = "0.1.17"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time handling
+chrono = { workspace = true }
+
+# Utilities
+async-trait = "0.1"
+uuid = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+
+# Cryptography
+hmac = { workspace = true }
+sha2 = { workspace = true }
+
+# Authentication
+nonce-auth = { workspace = true }
+
+# System monitoring
+pwrzv = { workspace = true }
+
+# Internal dependencies
+actrix-common = { path = "../common" }
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.8"
+serial_test = "3.0"
+tracing-subscriber = "0.3"

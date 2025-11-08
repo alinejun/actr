@@ -1,0 +1,64 @@
+# Actor-RTC 辅助服务配置文件模板
+# 此文件由 config crate 的 build.rs 自动生成
+# 请根据实际部署环境修改相应的配置值
+
+enable = 15
+
+name = "actrix-default"
+
+env = "dev"
+
+# user = "actrix"
+
+# group = "actrix"
+
+# pid = "logs/actrix.pid"
+
+
+[bind]
+# [bind.http]
+# domain_name = "localhost"
+# advertised_ip = "127.0.0.1"
+# ip = "0.0.0.0"
+# port = 8080
+
+# [bind.https]
+# domain_name = "localhost"
+# advertised_ip = "127.0.0.1"
+# ip = "0.0.0.0"
+# port = 8443
+# cert = "certificates/server.crt"
+# key = "certificates/server.key"
+
+
+[bind.ice]
+domain_name = "localhost"
+
+ip = "0.0.0.0"
+
+port = 3478
+
+
+
+
+[turn]
+advertised_ip = "127.0.0.1"
+
+advertised_port = 3478
+
+relay_port_range = "49152-65535"
+
+realm = "actor-rtc.local"
+
+
+location_tag = "default-location"
+
+# [supervisor]
+# associated_id = ""
+# secret = ""
+# addr = "ws://localhost:3000/supervisor"
+
+sqlite = "database.db"
+
+log_level = "info"
+
