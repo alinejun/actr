@@ -13,8 +13,8 @@ keywords = ["web-rtc", "signaling", "turn", "stun"]
 webrtc = { version = "0.13.0" }
 tokio = { version = "1.0", features = ["full"] }
 # Actor-RTC framework dependencies
-actr-framework = { path = "/d/actor-rtc/actr/crates/framework" }
-actr-protocol = { path = "/d/actor-rtc/actr/crates/protocol" }
+actr-framework = { path = "../actr/crates/framework" }
+actr-protocol = { path = "../actr/crates/protocol" }
 prost = "0.14.1"
 prost-types = "0.14.1"
 tracing = "0.1.41"
