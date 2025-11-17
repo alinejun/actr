@@ -54,7 +54,10 @@ tempfile = "3.0"
 dirs = "5.0"
 users = "0.11"
 local-ip-address = "0.6"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio-rustls",
+    "sqlite",
+] }
 
 # OpenTelemetry dependencies for distributed tracing
 opentelemetry = { version = "0.30.0", features = ["trace"] }
@@ -109,7 +112,7 @@ webpki-roots = "1.0.1"
 
 # Axum related
 tokio-util = { version = "0.7.13", features = ["io"] }
-axum-server = { version = "0.7.2", default-features = false, features = [
+axum-server = { version = "0.7.3", default-features = false, features = [
     "tls-rustls",
 ] }
 

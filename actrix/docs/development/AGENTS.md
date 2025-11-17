@@ -327,22 +327,45 @@ let config = ActrixConfig::from_file("config.toml")?;
 // 2. 初始化可观测性（日志 + 追踪）
 let _guard = init_observability(&config)?;
 
-// 3. 初始化服务管理器
-let mut service_manager = ServiceManager::new(config.clone());
+// 3. 广播通道 + 服务管理器
+let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(10);
+let mut service_manager = ServiceManager::new(config.clone(), shutdown_tx.clone());
 
-// 4. 根据配置启动服务
-if config.is_stun_enabled() {
-    service_manager.start_stun().await?;
-}
+// 4. 根据配置注册服务
 if config.is_turn_enabled() {
-    service_manager.start_turn().await?;
+    service_manager.add_service(ServiceContainer::turn(TurnService::new(config.clone())));
 }
 
-// 5. 等待关闭信号
-service_manager.wait_for_shutdown().await;
+if config.is_stun_enabled() {
+    service_manager.add_service(ServiceContainer::stun(StunService::new(config.clone())));
+}
 
-// 6. 优雅关闭（_guard 自动 Drop）
+// 5. 启动所有服务并收集任务句柄
+let mut handles = service_manager.start_all().await?;
+
+// 6. 附加 KS gRPC 等其他任务
+if config.is_ks_enabled() {
+    let mut ks_grpc = KsGrpcService::new(config.clone());
+    handles.push(
+        ks_grpc
+            .start("127.0.0.1:50052".parse()?, shutdown_tx.clone())
+            .await?,
+    );
+}
+
+// 7. 顺序等待所有任务，出错即广播关闭
+for handle in handles {
+    if let Err(e) = handle.await {
+        tracing::error!("background task failed: {}", e);
+        let _ = shutdown_tx.send(());
+    }
+}
+
+// 8. 优雅关闭（广播已触发，stop_all 清理资源）
+service_manager.stop_all().await?;
 ```
+
+> **运行时语义**：任何依附在 `shutdown_tx` 上的服务（包括 KS gRPC）退出后都会调用 `send(())`，从而驱动整套服务快速收敛，避免出现部分组件“僵死”但仍对外暴露健康状态的情况。
 
 ### 错误传播
 
