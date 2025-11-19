@@ -20,7 +20,7 @@ pub struct AisClientConfig {
 impl Default for AisClientConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://127.0.0.1:8443".to_string(),
+            endpoint: "https://127.0.0.1:8443".to_string(),
             timeout_seconds: 30,
         }
     }

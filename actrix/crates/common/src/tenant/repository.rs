@@ -195,9 +195,10 @@ mod tests {
     async fn test_database_schema() -> anyhow::Result<()> {
         setup_test_db().await?;
 
-        // 创建一个租户来触发表创建
+        // 创建一个租户来触发表创建，使用唯一名称
+        let tenant_id = format!("test_schema_{}", Uuid::new_v4());
         let mut tenant = Tenant::new(
-            "test_schema".to_string(),
+            tenant_id,
             "auth_key".to_string(),
             b"public_key".to_vec(),
             b"secret_key".to_vec(),

@@ -161,10 +161,11 @@ impl UnifiedConfigWizard {
         config.log_level = log_levels[log_index].to_string();
 
         // 数据库路径
-        config.sqlite = Input::with_theme(&self.theme)
-            .with_prompt("SQLite 数据库路径")
-            .default(config.sqlite.clone())
+        let sqlite_path_str = Input::with_theme(&self.theme)
+            .with_prompt("SQLite 数据库存储目录路径")
+            .default(config.sqlite_path.display().to_string())
             .interact_text()?;
+        config.sqlite_path = PathBuf::from(sqlite_path_str);
 
         // 运行用户（可选）
         let use_custom_user = Confirm::with_theme(&self.theme)
@@ -374,7 +375,7 @@ impl UnifiedConfigWizard {
         doc["name"] = value(&config.name);
         doc["env"] = value(&config.env);
         doc["location_tag"] = value(&config.location_tag);
-        doc["sqlite"] = value(&config.sqlite);
+        doc["sqlite_path"] = value(config.sqlite_path.display().to_string().as_str());
         doc["log_level"] = value(&config.log_level);
 
         // 可选字段

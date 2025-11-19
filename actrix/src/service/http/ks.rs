@@ -55,7 +55,8 @@ impl HttpRouterService for KsHttpService {
             .ok_or_else(|| anyhow::anyhow!("KS service configuration not found"))?;
 
         // 创建 nonce storage 实例（用于防重放攻击）
-        let nonce_storage = SqliteNonceStorage::new_async(ks_service_config.nonce_db_path.clone())
+        // 使用 sqlite_path 作为目录路径，内部会自动拼接 nonce.db
+        let nonce_storage = SqliteNonceStorage::new_async(&self.config.sqlite_path)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create nonce storage: {e}"))?;
 
@@ -64,6 +65,7 @@ impl HttpRouterService for KsHttpService {
             ks_service_config,
             nonce_storage,
             &self.config.actrix_shared_key,
+            &self.config.sqlite_path,
         )
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create KS state: {e}"))?;
