@@ -10,8 +10,8 @@ use crate::metrics::{collect_service_status, collect_system_metrics};
 use crate::nonce_auth::generate_credential;
 use std::time::Duration;
 use tokio::time::interval;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
 use tracing::{debug, error, info, warn};
 

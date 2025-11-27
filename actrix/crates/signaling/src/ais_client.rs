@@ -6,7 +6,7 @@ use actr_protocol::{ActrType, Realm, RegisterRequest, RegisterResponse, register
 use anyhow::{Result, anyhow};
 use prost::Message;
 use std::time::Duration;
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
 /// AIS 客户端配置
 #[derive(Debug, Clone)]
@@ -57,6 +57,7 @@ impl AisClient {
     /// # 返回
     /// - `Ok(RegisterResponse)`: 成功响应
     /// - `Err`: 网络错误或 AIS 返回错误
+    #[instrument(level = "debug", skip_all)]
     pub async fn refresh_credential(
         &self,
         realm_id: u32,

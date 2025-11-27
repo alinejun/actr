@@ -37,8 +37,8 @@ pub mod generated {
 
 // Re-export commonly used proto types
 pub use generated::{
-    supervisor_client::SupervisorClient, ConfigType, ConfigUpdateRequest, ConfigUpdateResponse,
-    HealthCheckRequest, HealthCheckResponse, OperationType, ResourceType, ServiceStatus, StatusAck,
-    StatusReport, SystemMetrics, TenantCreateInfo, TenantInfo, TenantList, TenantOperation,
-    TenantOperationResponse, TenantUpdateInfo,
+    ConfigType, ConfigUpdateRequest, ConfigUpdateResponse, HealthCheckRequest, HealthCheckResponse,
+    OperationType, ResourceType, ServiceStatus, StatusAck, StatusReport, SystemMetrics,
+    TenantCreateInfo, TenantInfo, TenantList, TenantOperation, TenantOperationResponse,
+    TenantUpdateInfo, supervisor_client::SupervisorClient,
 };

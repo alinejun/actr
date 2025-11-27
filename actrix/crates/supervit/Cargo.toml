@@ -1,7 +1,9 @@
 [package]
 name = "supervit"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 description = "gRPC-based supervisor client for actrix nodes"
 
 [dependencies]
@@ -16,11 +18,11 @@ tokio = { workspace = true, features = ["full"] }
 tokio-stream = "0.1.17"
 
 # Error handling
-thiserror = "2.0"
-anyhow = "1.0"
+thiserror = { workspace = true }
+anyhow = { workspace = true }
 
 # Logging
-tracing = "0.1"
+tracing = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
@@ -53,6 +55,6 @@ tonic-prost-build = "0.14"
 
 [dev-dependencies]
 tokio-test = "0.4"
-tempfile = "3.8"
-serial_test = "3.0"
-tracing-subscriber = "0.3"
+tempfile = { workspace = true }
+serial_test = { workspace = true }
+tracing-subscriber = { workspace = true }
