@@ -158,7 +158,7 @@ impl UnifiedConfigWizard {
             .items(&log_levels)
             .default(2) // info
             .interact()?;
-        config.log_level = log_levels[log_index].to_string();
+        config.observability.filter_level = log_levels[log_index].to_string();
 
         // 数据库路径
         let sqlite_path_str = Input::with_theme(&self.theme)
@@ -376,7 +376,24 @@ impl UnifiedConfigWizard {
         doc["env"] = value(&config.env);
         doc["location_tag"] = value(&config.location_tag);
         doc["sqlite_path"] = value(config.sqlite_path.display().to_string().as_str());
-        doc["log_level"] = value(&config.log_level);
+
+        // 可观测性配置
+        let mut observability_table = Table::new();
+        observability_table["filter_level"] = value(&config.observability.filter_level);
+        let mut log_table = Table::new();
+        log_table["output"] = value(&config.observability.log.output);
+        log_table["rotate"] = value(config.observability.log.rotate);
+        log_table["path"] = value(&config.observability.log.path);
+        observability_table["log"] = Item::Table(log_table);
+
+        let tracing_cfg = &config.observability.tracing;
+        let mut tracing_table = Table::new();
+        tracing_table["enable"] = value(tracing_cfg.enable);
+        tracing_table["service_name"] = value(&tracing_cfg.service_name);
+        tracing_table["endpoint"] = value(&tracing_cfg.endpoint);
+        observability_table["tracing"] = Item::Table(tracing_table);
+
+        doc["observability"] = Item::Table(observability_table);
 
         // 可选字段
         if let Some(ref user) = config.user {

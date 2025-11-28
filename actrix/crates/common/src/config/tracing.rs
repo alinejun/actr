@@ -137,4 +137,24 @@ mod tests {
         assert_eq!(config.service_name(), "my-service");
         assert_eq!(config.endpoint(), "http://jaeger:4317");
     }
+
+    #[test]
+    fn test_tracing_config_ignores_unknown_fields() {
+        // Test that unknown fields in [observability.tracing] are silently ignored
+        // This is important: location_tag and actrix_shared_key should NOT be here
+        let toml = r#"
+            enable = false
+            service_name = "test"
+            endpoint = "http://127.0.0.1:4317"
+            location_tag = "wrong-location"
+            actrix_shared_key = "wrong-key"
+        "#;
+
+        // Should parse successfully - unknown fields are ignored by serde
+        let config: TracingConfig = toml::from_str(toml).unwrap();
+        assert!(!config.is_enabled());
+        assert_eq!(config.service_name(), "test");
+        assert_eq!(config.endpoint(), "http://127.0.0.1:4317");
+        // Note: location_tag and actrix_shared_key are ignored, not accessible
+    }
 }

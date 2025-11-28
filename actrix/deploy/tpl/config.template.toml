@@ -54,11 +54,67 @@ realm = "actor-rtc.local"
 location_tag = "default-location"
 
 # [supervisor]
-# associated_id = ""
-# secret = ""
-# addr = "ws://localhost:3000/supervisor"
+# node_id = ""
+# server_addr = ""
+# connect_timeout_secs = ""
+# status_report_interval_secs = ""
+# health_check_interval_secs = ""
+# enable_tls = ""
+# tls_domain = ""
 
-sqlite = "database.db"
 
-log_level = "info"
+[services]
+# ks = ""
+
+# [services.ais]
+# [services.ais.server]
+# signaling_heartbeat_interval_secs = ""
+# token_ttl_secs = ""
+# [services.ais.dependencies]
+# ks = ""
+
+# [services.signaling]
+# [services.signaling.server]
+# ws_path = ""
+# [services.signaling.server.rate_limit]
+# [services.signaling.server.rate_limit.connection]
+# enabled = ""
+# per_minute = ""
+# burst_size = ""
+# max_concurrent_per_ip = ""
+# [services.signaling.server.rate_limit.message]
+# enabled = ""
+# per_second = ""
+# burst_size = ""
+# [services.signaling.dependencies]
+# ks = ""
+# ais = ""
+
+
+sqlite_path = "database"
+
+actrix_shared_key = "CHANGE_ME_32_CHAR_RANDOM_KEY_HERE"
+
+
+[observability]
+filter_level = "info"
+
+
+[observability.log]
+output = "console"
+
+rotate = false
+
+path = "logs/"
+
+
+
+[observability.tracing]
+enable = false
+
+service_name = "actrix"
+
+endpoint = "http://127.0.0.1:4317"
+
+
 

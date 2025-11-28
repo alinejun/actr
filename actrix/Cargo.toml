@@ -5,7 +5,7 @@ resolver = "2"
 
 [patch.crates-io]
 # Use local protocol definition that includes tracing headers
-actr-protocol = { git = "https://github.com/actor-rtc/actr", rev = "1aef3585fc7d80993e6f61dc42223053242091ea" }
+actr-protocol = { git = "https://github.com/actor-rtc/actr", rev = "00618c733d25a8586b09aa84eedd4a88396a6b8e" }
 
 [workspace.package]
 version = "0.1.1"
