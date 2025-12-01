@@ -49,36 +49,20 @@ impl Claims {
         Self { tid, key_id, token }
     }
 
-    /// 解密 token 获取明文信息
+    /// 获取 token 信息
     ///
-    /// 此方法会：
-    /// 1. 从租户数据库获取私钥（基于 tid 和 key_id）
-    /// 2. 使用 ECIES 解密 self.token
-    /// 3. 返回解密后的 Token 结构
+    /// 此方法会直接反序列化 self.token（不再使用 ECIES 解密）
+    ///
+    /// 注意：Token 不再加密传输，因为：
+    /// - 加密后的数据太大，超过 STUN username 属性的 763 字节限制
+    /// - PSK 是随机数据，本身不包含敏感信息
+    /// - 网络层通过 TURN over TLS 保护
     pub fn get_token(&self) -> Result<Token> {
-        // 1. 从租户数据库获取私钥
-        // 注意：在同步上下文中调用 async 方法需要使用 block_on
-        let secret_key = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                actrix_common::tenant::Tenant::get_private_key(
-                    self.tid.clone(),
-                    self.key_id.clone(),
-                )
-                .await
-            })
-        })
-        .map_err(|e| anyhow::anyhow!("Failed to get private key: {e}"))?;
-
-        // 2. 使用 ECIES 解密 token
-        let secret_key_bytes = secret_key.serialize();
-        let decrypted_bytes = ecies::decrypt(&secret_key_bytes, &self.token)
-            .map_err(|e| anyhow::anyhow!("Failed to decrypt token: {e}"))?;
-
-        // 3. 反序列化为 Token 结构
-        let token: Token = serde_json::from_slice(&decrypted_bytes)
+        // 直接反序列化为 Token 结构（token 是明文 JSON）
+        let token: Token = serde_json::from_slice(&self.token)
             .map_err(|e| anyhow::anyhow!("Failed to deserialize token: {e}"))?;
 
-        // 4. 可选：验证 token 是否过期
+        // 验证 token 是否过期
         if token.is_expired() {
             return Err(anyhow::anyhow!("Token has expired"));
         }
