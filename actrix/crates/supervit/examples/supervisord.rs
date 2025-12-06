@@ -32,7 +32,6 @@ use std::sync::Arc;
 
 use actrix_common::ServiceCollector;
 use actrix_common::storage::{SqliteNonceStorage, db::set_db_path};
-use actrix_proto::ServiceStatus;
 use hex;
 use tonic::transport::Server;
 use tracing::{Level, info};

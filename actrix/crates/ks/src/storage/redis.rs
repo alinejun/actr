@@ -11,7 +11,7 @@ use base64::prelude::*;
 use deadpool_redis::{Config, Pool, Runtime};
 use redis::AsyncCommands;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 /// Redis 存储后端
 ///

@@ -30,7 +30,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --all-features
 
   fmt:
     name: Format Check
@@ -60,7 +60,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo clippy --workspace --all-features -- -D warnings
 
   build:
     name: Build Release

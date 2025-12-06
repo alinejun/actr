@@ -514,8 +514,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_service_advertisements_merges_tags() {
-        use actrix_proto::ResourceType;
-
         let config = SupervitConfig {
             node_id: "test-node".to_string(),
             endpoint: "http://localhost:50051".to_string(),
