@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "actr-framework"
 version = "0.1.4"
-source = "git+https://github.com/actor-rtc/actr.git?rev=646893b111fd7313eebd41e23de76c51db7474f9#646893b111fd7313eebd41e23de76c51db7474f9"
+source = "git+https://github.com/actor-rtc/actr.git?rev=40502e5540699be2b82b199a8a4dd829527a9ef3#40502e5540699be2b82b199a8a4dd829527a9ef3"
 dependencies = [
  "actr-protocol",
  "anyhow",
@@ -20,7 +20,7 @@ dependencies = [
 [[package]]
 name = "actr-protocol"
 version = "0.1.5"
-source = "git+https://github.com/actor-rtc/actr.git?rev=646893b111fd7313eebd41e23de76c51db7474f9#646893b111fd7313eebd41e23de76c51db7474f9"
+source = "git+https://github.com/actor-rtc/actr.git?rev=40502e5540699be2b82b199a8a4dd829527a9ef3#40502e5540699be2b82b199a8a4dd829527a9ef3"
 dependencies = [
  "anyhow",
  "base122-rs",
