@@ -125,7 +125,7 @@ fn main() {
     let shared_secret = match hex::decode(&args.shared_secret) {
         Ok(secret) => secret,
         Err(e) => {
-            eprintln!("Error: Invalid hex secret: {}", e);
+            eprintln!("Error: Invalid hex secret: {e}");
             std::process::exit(1);
         }
     };
@@ -134,7 +134,7 @@ fn main() {
     let credential = match CredentialBuilder::new(&shared_secret).sign(payload.as_bytes()) {
         Ok(cred) => cred,
         Err(e) => {
-            eprintln!("Error: Failed to generate credential: {}", e);
+            eprintln!("Error: Failed to generate credential: {e}");
             std::process::exit(1);
         }
     };
@@ -148,8 +148,7 @@ fn main() {
         OutputFormat::Json => {
             // Pure JSON output for script consumption
             println!(
-                r#"{{"timestamp": {},"nonce": "{}","signature": "{}"}}"#,
-                timestamp, nonce, signature
+                r#"{{"timestamp": {timestamp},"nonce": "{nonce}","signature": "{signature}"}}"#
             );
         }
         OutputFormat::Human => {
@@ -159,11 +158,10 @@ fn main() {
             println!("Credential:");
             println!(
                 r#"{{
-  "timestamp": {},
-  "nonce": "{}",
-  "signature": "{}"
-}}"#,
-                timestamp, nonce, signature
+  "timestamp": {timestamp},
+  "nonce": "{nonce}",
+  "signature": "{signature}"
+}}"#
             );
             println!();
             println!("Test with grpcurl script:");

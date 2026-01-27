@@ -42,7 +42,20 @@ impl RealmConfig {
         let db = get_database();
         let pool = db.get_pool();
 
-        if self.rowid.is_none() {
+        if let Some(rowid) = self.rowid {
+            // 更新现有记录
+            sqlx::query(
+                "UPDATE realmconfig SET realm_rowid = ?, key = ?, value = ? WHERE rowid = ?",
+            )
+            .bind(self.realm_rowid)
+            .bind(&self.key)
+            .bind(&self.value)
+            .bind(rowid)
+            .execute(pool)
+            .await?;
+
+            Ok(rowid)
+        } else {
             // 插入新记录
             let result =
                 sqlx::query("INSERT INTO realmconfig (realm_rowid, key, value) VALUES (?, ?, ?)")
@@ -55,19 +68,6 @@ impl RealmConfig {
             let new_rowid = result.last_insert_rowid().try_into().unwrap();
             self.rowid = Some(new_rowid);
             Ok(new_rowid)
-        } else {
-            // 更新现有记录
-            sqlx::query(
-                "UPDATE realmconfig SET realm_rowid = ?, key = ?, value = ? WHERE rowid = ?",
-            )
-            .bind(self.realm_rowid)
-            .bind(&self.key)
-            .bind(&self.value)
-            .bind(self.rowid)
-            .execute(pool)
-            .await?;
-
-            Ok(self.rowid.unwrap())
         }
     }
 

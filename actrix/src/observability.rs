@@ -71,10 +71,7 @@ fn create_env_filter(config: &ObservabilityConfig) -> EnvFilter {
         });
 
     EnvFilter::try_new(&directive).unwrap_or_else(|_| {
-        println!(
-            "Failed to parse filter directive: {}. Falling back to default: info",
-            directive
-        );
+        println!("Failed to parse filter directive: {directive}. Falling back to default: info");
         EnvFilter::new("info")
     })
 }
