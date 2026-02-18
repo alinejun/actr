@@ -338,7 +338,8 @@ mod tests {
         cache.store(report_1);
         let key_1 =
             GlobalCompatibilityCache::build_cache_key("test/evict", "fp-client-1", "fp-server-1");
-        cache.cache.get_mut(&key_1).expect("entry1").cached_at = UNIX_EPOCH + Duration::from_secs(1);
+        cache.cache.get_mut(&key_1).expect("entry1").cached_at =
+            UNIX_EPOCH + Duration::from_secs(1);
 
         let report_2 = CompatibilityReportData {
             from_fingerprint: "fp-client-2".to_string(),
@@ -349,7 +350,8 @@ mod tests {
         cache.store(report_2);
         let key_2 =
             GlobalCompatibilityCache::build_cache_key("test/evict", "fp-client-2", "fp-server-2");
-        cache.cache.get_mut(&key_2).expect("entry2").cached_at = UNIX_EPOCH + Duration::from_secs(2);
+        cache.cache.get_mut(&key_2).expect("entry2").cached_at =
+            UNIX_EPOCH + Duration::from_secs(2);
 
         let report_3 = CompatibilityReportData {
             from_fingerprint: "fp-client-3".to_string(),
