@@ -253,6 +253,38 @@ fn build_register_request(node_id: &str, shared_secret: &[u8]) -> RegisterNodeRe
     }
 }
 
+fn build_register_request_with_timestamp(
+    node_id: &str,
+    shared_secret: &[u8],
+    timestamp: u64,
+) -> RegisterNodeRequest {
+    let request = RegisterNodeRequest {
+        node_id: node_id.to_string(),
+        name: "test-node".to_string(),
+        location_tag: "test-location".to_string(),
+        version: "0.0.1".to_string(),
+        agent_addr: "127.0.0.1:60000".to_string(),
+        credential: NonceCredential::default(),
+        location: None,
+        service_tags: vec![],
+        power_reserve_level_init: Some(1),
+        services: vec![],
+    };
+
+    let fingerprint = build_registration_fingerprint(&request);
+    let payload = format!("register:{node_id}:{fingerprint}");
+    let credential = CredentialBuilder::new(shared_secret)
+        .with_time_provider(move || Ok(timestamp))
+        .sign(payload.as_bytes())
+        .expect("credential generation should succeed");
+    let credential = supervit::nonce_auth::to_proto_credential(credential);
+
+    RegisterNodeRequest {
+        credential,
+        ..request
+    }
+}
+
 fn build_report_request(node_id: &str, shared_secret: &[u8]) -> ReportRequest {
     let timestamp = chrono::Utc::now().timestamp();
     let payload = format!("report:{node_id}:{timestamp}");
@@ -318,5 +350,87 @@ async fn register_report_health_flow_succeeds() -> Result<(), Box<dyn std::error
     handle.abort();
     let _ = handle.await;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn register_node_rejects_invalid_signature() -> Result<(), Box<dyn std::error::Error>> {
+    let shared_secret = hex::decode(TEST_SHARED_SECRET)?;
+    let wrong_secret =
+        hex::decode("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")?;
+    let (addr, _temp_dir, handle) = spawn_test_supervisor(shared_secret.clone(), 300, 15).await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let endpoint = format!("http://{addr}");
+    let mut client = SupervisorServiceClient::connect(endpoint).await?;
+
+    let request = build_register_request("invalid-signature-node", &wrong_secret);
+    let err = client.register_node(request).await.expect_err("request should fail");
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    assert!(
+        err.message().contains("invalid signature"),
+        "unexpected error: {}",
+        err.message()
+    );
+
+    handle.abort();
+    let _ = handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn register_node_rejects_timestamp_out_of_window() -> Result<(), Box<dyn std::error::Error>>
+{
+    let shared_secret = hex::decode(TEST_SHARED_SECRET)?;
+    let skew_secs = 30_u64;
+    let (addr, _temp_dir, handle) = spawn_test_supervisor(shared_secret.clone(), skew_secs, 15).await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let endpoint = format!("http://{addr}");
+    let mut client = SupervisorServiceClient::connect(endpoint).await?;
+
+    let stale_ts = (chrono::Utc::now().timestamp() as u64).saturating_sub(skew_secs + 120);
+    let request =
+        build_register_request_with_timestamp("stale-timestamp-node", &shared_secret, stale_ts);
+
+    let err = client.register_node(request).await.expect_err("request should fail");
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    assert!(
+        err.message().contains("timestamp outside allowed window"),
+        "unexpected error: {}",
+        err.message()
+    );
+
+    handle.abort();
+    let _ = handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn register_node_rejects_duplicate_nonce_replay() -> Result<(), Box<dyn std::error::Error>> {
+    let shared_secret = hex::decode(TEST_SHARED_SECRET)?;
+    let (addr, _temp_dir, handle) = spawn_test_supervisor(shared_secret.clone(), 300, 15).await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let endpoint = format!("http://{addr}");
+    let mut client = SupervisorServiceClient::connect(endpoint).await?;
+
+    let request = build_register_request("duplicate-nonce-node", &shared_secret);
+    let first = client.register_node(request.clone()).await?.into_inner();
+    assert!(first.success);
+
+    let err = client
+        .register_node(request)
+        .await
+        .expect_err("replay should fail");
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    assert!(
+        err.message().contains("duplicate nonce"),
+        "unexpected error: {}",
+        err.message()
+    );
+
+    handle.abort();
+    let _ = handle.await;
     Ok(())
 }
