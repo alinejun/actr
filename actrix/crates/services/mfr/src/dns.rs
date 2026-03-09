@@ -17,7 +17,7 @@ pub async fn verify_txt_record(domain: &str, expected_token: &str) -> Result<boo
             Ok(false)
         }
         Err(e) => {
-            tracing::warn!(domain = %domain, error = %e, "DNS TXT lookup failed");
+            platform::recording::warn!("DNS TXT lookup failed: domain={}, error={}", domain, e);
             Err(MfrError::Dns(e.to_string()))
         }
     }
