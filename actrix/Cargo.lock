@@ -196,10 +196,10 @@ dependencies = [
 
 [[package]]
 name = "actrix-mfr"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64",
  "chrono",
  "ed25519-dalek",
  "hickory-resolver",
@@ -210,7 +210,7 @@ dependencies = [
  "serial_test",
  "sqlx",
  "tempfile",
- "thiserror 2.0.17",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]
@@ -6321,6 +6321,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a5364e9d77fcdeeaa6062ced926ee3381faa2ee02d3eb83a5c27a8825540829"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winreg"
+version = "0.50.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "524e57b2c537c0f9b1e69f1965311ec12182b4122e45035b1508cd24d2adadb1"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
