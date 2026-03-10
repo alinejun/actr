@@ -25,10 +25,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - name: Build admin UI
-        run: npm ci && npm run build
-        working-directory: crates/actrixd/admin/web
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -54,10 +50,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
-
-      - name: Build admin UI
-        run: npm ci && npm run build
-        working-directory: crates/actrixd/admin/web
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -93,10 +85,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
-
-      - name: Build admin UI
-        run: npm ci && npm run build
-        working-directory: crates/actrixd/admin/web
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -135,10 +123,6 @@ jobs:
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'
         run: brew install protobuf
-
-      - name: Build admin UI
-        run: npm ci && npm run build
-        working-directory: crates/actrixd/admin/web
 
       - uses: dtolnay/rust-toolchain@stable
 
