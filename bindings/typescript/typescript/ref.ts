@@ -72,7 +72,13 @@ export class ActrRef {
     timeoutMs: number = 30000,
   ): Promise<Buffer> {
     return await callNative(() =>
-      this.native.call(target, routeKey, payloadType, requestPayload, timeoutMs),
+      this.native.call(
+        target,
+        routeKey,
+        payloadType,
+        requestPayload,
+        timeoutMs,
+      ),
     );
   }
 

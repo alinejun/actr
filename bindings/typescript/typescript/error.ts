@@ -58,9 +58,15 @@ export class ActrError extends Error {
       this.service_name = payload.service_name;
     }
     // Preserve V8 stack-trace ergonomics in Node.
-    if (typeof (Error as { captureStackTrace?: unknown }).captureStackTrace === 'function') {
-      (Error as unknown as { captureStackTrace: (t: unknown, c: unknown) => void })
-        .captureStackTrace(this, ActrError);
+    if (
+      typeof (Error as { captureStackTrace?: unknown }).captureStackTrace ===
+      'function'
+    ) {
+      (
+        Error as unknown as {
+          captureStackTrace: (t: unknown, c: unknown) => void;
+        }
+      ).captureStackTrace(this, ActrError);
     }
   }
 

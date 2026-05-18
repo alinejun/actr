@@ -18,7 +18,9 @@ export class ActrNode {
    * @returns ActrNode instance
    */
   static async fromConfig(configPath: string): Promise<ActrNode> {
-    const nativeNode = await callNative(() => NativeActrNode.fromFile(configPath));
+    const nativeNode = await callNative(() =>
+      NativeActrNode.fromFile(configPath),
+    );
     return new ActrNode(nativeNode);
   }
 
