@@ -22,6 +22,9 @@
 #   bash bindings/web/scripts/sync-cli-assets.sh           # sync only
 #   bash bindings/web/scripts/sync-cli-assets.sh --build   # build sw-host wasm first
 #   bash bindings/web/scripts/sync-cli-assets.sh --check   # verify in-sync, exit 1 on drift (CI use)
+#   bash bindings/web/scripts/sync-cli-assets.sh --check --skip-sw-host
+#       # verify stable source assets only; useful when sw-host wasm is rebuilt
+#       # on a different host/toolchain and is not byte-for-byte comparable
 
 set -euo pipefail
 
@@ -40,10 +43,12 @@ PAIRS=(
 )
 
 mode="sync"
+skip_sw_host=0
 for arg in "$@"; do
   case "$arg" in
     --build) mode="build-then-sync" ;;
     --check) mode="check" ;;
+    --skip-sw-host) skip_sw_host=1 ;;
     -h|--help)
       sed -n '2,/^set /p' "$0" | sed 's/^# \?//;/^$/d'
       exit 0
@@ -57,7 +62,7 @@ done
 
 if [ "$mode" = "build-then-sync" ]; then
   echo "→ rebuilding sw-host wasm via build.sh..."
-  ( cd "$REPO_ROOT/bindings/web/crates/sw-host" && bash build.sh )
+  ( cd "$REPO_ROOT/bindings/web/crates/sw-host" && ACTR_SKIP_CLI_ASSET_SYNC=1 bash build.sh )
 fi
 
 mkdir -p "$CLI_ASSETS"
@@ -67,6 +72,11 @@ for pair in "${PAIRS[@]}"; do
   src="${pair%%:*}"
   name="${pair##*:}"
   dst="$CLI_ASSETS/$name"
+
+  if [ "$skip_sw_host" -eq 1 ] && [[ "$name" == actr_sw_host* ]]; then
+    echo "↷ skipped generated sw-host asset: $name"
+    continue
+  fi
 
   if [ ! -f "$src" ]; then
     echo "✗ missing source: $src" >&2

@@ -8,6 +8,18 @@ repository = "https://github.com/actor-rtc/actr"
 description = "Command line tool for Actor-RTC framework projects"
 keywords = ["actor", "cli", "codegen", "protobuf", "framework"]
 categories = ["command-line-utilities", "development-tools"]
+include = [
+    "Cargo.toml",
+    "LICENSE",
+    "README.md",
+    "build.rs",
+    "src/**",
+    "fixtures/**",
+    "assets/web-runtime/actor.sw.js",
+    "assets/web-runtime/actr-host.html",
+    "assets/web-runtime/actr_sw_host.js",
+    "assets/web-runtime/actr_sw_host_bg.wasm",
+]
 
 [features]
 default = ["wasm-engine", "dynclib-engine"]

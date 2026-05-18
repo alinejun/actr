@@ -59,7 +59,7 @@ jobs:
           # wasm32-wasip2 is required for the Component Model guest
           # fixture rebuilt by core/hyper/tests/wasm_actor_fixture/build.sh
           # under --all-features (wasm-engine).
-          targets: wasm32-wasip2
+          targets: wasm32-wasip2,wasm32-unknown-unknown
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -75,7 +75,11 @@ jobs:
         run: |
           cargo install wasm-component-ld --version 0.5.22 --locked
           cargo install wasm-tools --version 1.247.0 --locked
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.13.1 --locked
       - uses: Swatinem/rust-cache@v2
+      - name: Generate CLI web runtime assets
+        run: bash bindings/web/scripts/sync-cli-assets.sh --build
       - name: Build workspace
         run: cargo build --verbose --all-features
       - name: Build release
@@ -92,7 +96,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-wasip2
+          targets: wasm32-wasip2,wasm32-unknown-unknown
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -102,7 +106,11 @@ jobs:
         run: |
           cargo install wasm-component-ld --version 0.5.22 --locked
           cargo install wasm-tools --version 1.247.0 --locked
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.13.1 --locked
       - uses: Swatinem/rust-cache@v2
+      - name: Generate CLI web runtime assets
+        run: bash bindings/web/scripts/sync-cli-assets.sh --build
       - name: Run tests
         run: cargo test --workspace --verbose --all-features
 

@@ -12,10 +12,13 @@
 //! - `actr-host.html`       — self-contained host page with inline @actr/dom
 
 /// Shared SW host WASM binary (compiled from actr-sw-host via wasm-pack).
-pub const RUNTIME_WASM: &[u8] = include_bytes!("../assets/web-runtime/actr_sw_host_bg.wasm");
+pub const RUNTIME_WASM: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/web-runtime/actr_sw_host_bg.wasm"
+));
 
 /// wasm-bindgen JS glue for the shared SW host.
-pub const RUNTIME_JS: &str = include_str!("../assets/web-runtime/actr_sw_host.js");
+pub const RUNTIME_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/web-runtime/actr_sw_host.js"));
 
 /// Service Worker entry point — wasm-bindgen guest bridge (Option U).
 pub const ACTOR_SW_JS: &str = include_str!("../assets/web-runtime/actor.sw.js");

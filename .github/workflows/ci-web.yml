@@ -32,6 +32,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.13.1 --locked
+
       - name: Check formatting
         working-directory: bindings/web
         run: cargo fmt --all -- --check
@@ -43,8 +46,14 @@ jobs:
       - name: WIT codegen drift gate (Option U)
         run: cargo run -p actr-wit-compile-web -- --check
 
+      - name: Build sw-host runtime assets
+        working-directory: bindings/web/crates/sw-host
+        env:
+          ACTR_SKIP_CLI_ASSET_SYNC: "1"
+        run: bash build.sh
+
       - name: cli/assets sync drift gate
-        run: bash bindings/web/scripts/sync-cli-assets.sh --check
+        run: bash bindings/web/scripts/sync-cli-assets.sh --check --skip-sw-host
 
   browser-e2e:
     name: Web Browser E2E (Puppeteer)
@@ -73,12 +82,12 @@ jobs:
           cargo install wasm-tools --version 1.247.0 --locked
 
       - name: Install wasm-pack
-        run: cargo install wasm-pack --locked
+        run: cargo install wasm-pack --version 0.13.1 --locked
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       - uses: Swatinem/rust-cache@v2
 
@@ -94,12 +103,19 @@ jobs:
 
       - name: Install web binding root deps (puppeteer)
         working-directory: bindings/web
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
         run: |
           corepack enable
+          corepack prepare pnpm@9.15.9 --activate
           pnpm install --frozen-lockfile
 
+      - name: Generate CLI web runtime assets
+        run: bash bindings/web/scripts/sync-cli-assets.sh --build
+
       - name: Pre-build actr CLI (release, embeds web assets)
-        run: cargo build --release --bin actr
+        run: cargo build --release -p actr-cli --bin actr
 
       - name: Pre-build mock-actrix
         run: cargo build --release -p actr-mock-actrix --bin mock-actrix

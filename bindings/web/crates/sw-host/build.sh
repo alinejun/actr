@@ -10,6 +10,10 @@ export CARGO_ENCODED_RUSTFLAGS=""
 
 echo "Building Service Worker Host..."
 
+# cd to the sw-host crate directory so wasm-pack reads the correct Cargo.toml.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 # Ensure a writable temp directory for wasm-bindgen install.
 TMPDIR="${TMPDIR:-$(pwd)/.tmp}"
 export TMPDIR
@@ -49,8 +53,11 @@ ls -lh ../../dist/sw/
 # the actr CLI embeds them via include_bytes!. Without this step, edits to
 # sw-host source silently drift from what `actr run --web` serves — see
 # bindings/web/docs/tech-debt.zh.md TD-002 for context.
-SYNC_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/sync-cli-assets.sh"
-if [ -x "$SYNC_SCRIPT" ]; then
+SYNC_SCRIPT="$SCRIPT_DIR/../../scripts/sync-cli-assets.sh"
+if [ "${ACTR_SKIP_CLI_ASSET_SYNC:-0}" = "1" ]; then
+  echo
+  echo "(skip sync: ACTR_SKIP_CLI_ASSET_SYNC=1)"
+elif [ -x "$SYNC_SCRIPT" ]; then
   echo
   bash "$SYNC_SCRIPT"
 else

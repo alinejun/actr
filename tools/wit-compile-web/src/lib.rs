@@ -27,7 +27,9 @@
 //! read much better as raw text than as TokenStream incantations.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
 use heck::{ToPascalCase, ToSnakeCase};
@@ -923,10 +925,38 @@ fn emit_workload_export(out: &mut String, func: &FuncDef) {
 pub fn generate_from_path(wit_path: &Path) -> Result<Generated> {
     let model = load_model(wit_path)?;
     Ok(Generated {
-        types: emit_types(&model),
-        guest: emit_guest(&model),
-        host: emit_host(&model),
+        types: format_rust_source("types.rs", emit_types(&model))?,
+        guest: format_rust_source("guest.rs", emit_guest(&model))?,
+        host: format_rust_source("host.rs", emit_host(&model))?,
     })
+}
+
+fn format_rust_source(file: &'static str, source: String) -> Result<String> {
+    let mut child = Command::new("rustfmt")
+        .args(["--emit", "stdout"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| "spawn rustfmt for generated source")?;
+
+    child
+        .stdin
+        .as_mut()
+        .expect("rustfmt stdin is piped")
+        .write_all(source.as_bytes())
+        .with_context(|| format!("write generated {file} to rustfmt"))?;
+
+    let output = child
+        .wait_with_output()
+        .with_context(|| format!("wait for rustfmt on generated {file}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("rustfmt failed for generated {file}: {stderr}");
+    }
+
+    String::from_utf8(output.stdout)
+        .with_context(|| format!("rustfmt output for {file} was not UTF-8"))
 }
 
 /// Write the three sources under `out_dir`, creating the directory if
