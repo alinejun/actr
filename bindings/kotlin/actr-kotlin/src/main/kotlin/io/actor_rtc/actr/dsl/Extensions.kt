@@ -162,7 +162,7 @@ val ActrException.userMessage: String
                 is ActrException.InvalidArgument -> "Invalid argument: $msg"
                 is ActrException.UnknownRoute -> "Unknown route: $msg"
                 is ActrException.DependencyNotFound ->
-                        "Dependency '$serviceName' not found: $message"
+                        "Dependency '$serviceName' not found: $detail"
                 is ActrException.DecodeFailure -> "Decode failure: $msg"
                 is ActrException.NotImplemented -> "Not implemented: $msg"
                 is ActrException.Internal -> "Internal error: $msg"

@@ -4834,10 +4834,10 @@ sealed class ActrException: kotlin.Exception() {
         
         val `serviceName`: kotlin.String, 
         
-        val `message`: kotlin.String
+        val `detail`: kotlin.String
         ) : ActrException() {
         override val message
-            get() = "serviceName=${ `serviceName` }, message=${ `message` }"
+            get() = "serviceName=${ `serviceName` }, detail=${ `detail` }"
     }
     
     class DecodeFailure(
@@ -4966,7 +4966,7 @@ public object FfiConverterTypeActrError : FfiConverterRustBuffer<ActrException> 
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
                 4UL
                 + FfiConverterString.allocationSize(value.`serviceName`)
-                + FfiConverterString.allocationSize(value.`message`)
+                + FfiConverterString.allocationSize(value.`detail`)
             )
             is ActrException.DecodeFailure -> (
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
@@ -5025,7 +5025,7 @@ public object FfiConverterTypeActrError : FfiConverterRustBuffer<ActrException> 
             is ActrException.DependencyNotFound -> {
                 buf.putInt(7)
                 FfiConverterString.write(value.`serviceName`, buf)
-                FfiConverterString.write(value.`message`, buf)
+                FfiConverterString.write(value.`detail`, buf)
                 Unit
             }
             is ActrException.DecodeFailure -> {
@@ -6813,4 +6813,3 @@ public object FfiConverterSequenceTypeMetadataEntry: FfiConverterRustBuffer<List
     )
     }
     
-

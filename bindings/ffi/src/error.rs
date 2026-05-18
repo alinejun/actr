@@ -62,10 +62,10 @@ pub enum ActrError {
     #[error("unknown route: {msg}")]
     UnknownRoute { msg: String },
 
-    #[error("dependency '{service_name}' not found: {message}")]
+    #[error("dependency '{service_name}' not found: {detail}")]
     DependencyNotFound {
         service_name: String,
-        message: String,
+        detail: String,
     },
 
     // ── Corrupt ───────────────────────────────────────────────────────────
@@ -163,7 +163,7 @@ impl From<actr_protocol::ActrError> for ActrError {
                 message,
             } => ActrError::DependencyNotFound {
                 service_name,
-                message,
+                detail: message,
             },
             actr_protocol::ActrError::DecodeFailure(msg) => ActrError::DecodeFailure { msg },
             actr_protocol::ActrError::NotImplemented(msg) => ActrError::NotImplemented { msg },
@@ -183,10 +183,10 @@ impl From<ActrError> for actr_protocol::ActrError {
             ActrError::UnknownRoute { msg } => actr_protocol::ActrError::UnknownRoute(msg),
             ActrError::DependencyNotFound {
                 service_name,
-                message,
+                detail,
             } => actr_protocol::ActrError::DependencyNotFound {
                 service_name,
-                message,
+                message: detail,
             },
             ActrError::DecodeFailure { msg } => actr_protocol::ActrError::DecodeFailure(msg),
             ActrError::NotImplemented { msg } => actr_protocol::ActrError::NotImplemented(msg),

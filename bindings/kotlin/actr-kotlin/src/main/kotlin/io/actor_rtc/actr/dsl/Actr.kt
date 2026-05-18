@@ -36,7 +36,7 @@ import io.actor_rtc.actr.ActrNode as ActrNodeGenerated
 import io.actor_rtc.actr.ActrRefWrapper
 import io.actor_rtc.actr.ActrType
 import io.actor_rtc.actr.NetworkEventHandleWrapper
-import io.actor_rtc.actr.WorkloadBridge
+import io.actor_rtc.actr.WorkloadLifecycleBridge
 
 // ============================================================================
 // Type Aliases - Provide DSL-friendly names
@@ -68,7 +68,7 @@ typealias ActrRef = ActrRefWrapper
 typealias NetworkEventHandle = NetworkEventHandleWrapper
 
 /** Workload callback interface for handling lifecycle events. */
-typealias Workload = WorkloadBridge
+typealias Workload = WorkloadLifecycleBridge
 
 // ============================================================================
 // ActrNode Factory Functions

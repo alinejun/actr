@@ -5,10 +5,11 @@ import io.actor_rtc.actr.ActrId
 import io.actor_rtc.actr.ActrType
 import io.actor_rtc.actr.ContextBridge
 import io.actor_rtc.actr.DataStream
+import io.actor_rtc.actr.ErrorEventBridge
 import io.actor_rtc.actr.PayloadType
 import io.actor_rtc.actr.Realm
 import io.actor_rtc.actr.RpcEnvelopeBridge
-import io.actor_rtc.actr.WorkloadBridge
+import io.actor_rtc.actr.WorkloadLifecycleBridge
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
@@ -41,7 +42,7 @@ open class SimpleWorkload(
         private val type: ActrType,
         private val onStartHandler: suspend (ContextBridge) -> Unit = {},
         private val onStopHandler: suspend (ContextBridge) -> Unit = {}
-) : WorkloadBridge {
+) : WorkloadLifecycleBridge {
 
     /** Channel for sending DataStream requests from UI to workload. */
     private val dataStreamChannel = Channel<DataStreamRequest>(Channel.UNLIMITED)
@@ -129,8 +130,16 @@ open class SimpleWorkload(
         onStartHandler(ctx)
     }
 
+    override suspend fun onReady(ctx: ContextBridge) {
+        // Default: do nothing
+    }
+
     override suspend fun onStop(ctx: ContextBridge) {
         onStopHandler(ctx)
+    }
+
+    override suspend fun onError(ctx: ContextBridge, event: ErrorEventBridge) {
+        // Default: do nothing
     }
 
     /**
@@ -150,7 +159,7 @@ open class SimpleWorkload(
      */
     override suspend fun dispatch(ctx: ContextBridge, envelope: RpcEnvelopeBridge): ByteArray {
         throw IllegalStateException(
-                "dispatch() must be implemented by subclass or use a custom WorkloadBridge"
+                "dispatch() must be implemented by subclass or use a custom WorkloadLifecycleBridge"
         )
     }
 }
@@ -254,7 +263,7 @@ class WorkloadBuilder {
  * ```
  */
 abstract class RoutedWorkload(private val realmId: UInt, private val type: ActrType) :
-        WorkloadBridge {
+        WorkloadLifecycleBridge {
 
     constructor(realmId: UInt, typeString: String) : this(realmId, typeString.toActrType())
 
@@ -285,8 +294,18 @@ abstract class RoutedWorkload(private val realmId: UInt, private val type: ActrT
         // Default: do nothing
     }
 
+    /** Called when the workload is ready. Override to add custom logic. */
+    override suspend fun onReady(ctx: ContextBridge) {
+        // Default: do nothing
+    }
+
     /** Called when the workload stops. Override to add custom logic. */
     override suspend fun onStop(ctx: ContextBridge) {
+        // Default: do nothing
+    }
+
+    /** Called when the runtime reports a workload error. Override to add custom logic. */
+    override suspend fun onError(ctx: ContextBridge, event: ErrorEventBridge) {
         // Default: do nothing
     }
 
