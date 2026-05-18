@@ -94,7 +94,9 @@ jobs:
 
       - name: Install web binding root deps (puppeteer)
         working-directory: bindings/web
-        run: npm install --no-audit --no-fund
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
 
       - name: Pre-build actr CLI (release, embeds web assets)
         run: cargo build --release --bin actr

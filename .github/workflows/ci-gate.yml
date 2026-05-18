@@ -174,14 +174,16 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ github.token }}
+      - name: Create Python virtualenv
+        run: python -m venv .venv
       - name: Install maturin and pytest
-        run: python -m pip install -U maturin pytest
+        run: .venv/bin/python -m pip install -U maturin pytest
       - name: Build Python binding
-        run: maturin build --manifest-path Cargo.toml
+        run: .venv/bin/maturin build --manifest-path Cargo.toml
       - name: Install Python binding (editable)
-        run: maturin develop --manifest-path Cargo.toml
+        run: .venv/bin/maturin develop --manifest-path Cargo.toml
       - name: Run smoke tests
-        run: pytest tests/ -v
+        run: .venv/bin/python -m pytest tests/ -v
 
   python_codegen:
     name: Python Codegen
@@ -342,7 +344,9 @@ jobs:
           google-chrome --version || google-chrome-stable --version || true
       - name: Install web binding root deps (puppeteer)
         working-directory: bindings/web
-        run: npm install --no-audit --no-fund
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
       - name: Pre-build actr CLI (release)
         run: cargo build --release --bin actr
       - name: Pre-build mock-actrix
