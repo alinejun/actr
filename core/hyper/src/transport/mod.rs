@@ -58,9 +58,9 @@ pub use wire_builder::{DefaultWireBuilder, DefaultWireBuilderConfig};
 #[cfg(not(feature = "test-utils"))]
 pub(crate) use wire_builder::{DefaultWireBuilder, DefaultWireBuilderConfig};
 #[cfg(feature = "test-utils")]
-pub use wire_handle::WireHandle;
+pub use wire_handle::{WireHandle, WireIdentity};
 #[cfg(not(feature = "test-utils"))]
-pub(crate) use wire_handle::WireHandle;
+pub(crate) use wire_handle::{WireHandle, WireIdentity};
 
 // Error types
 pub use error::{NetworkError, NetworkResult};
