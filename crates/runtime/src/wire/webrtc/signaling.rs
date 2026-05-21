@@ -24,6 +24,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
+use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
@@ -147,6 +148,21 @@ pub trait SignalingClient: Send + Sync {
     /// DisconnectConnect
     async fn disconnect(&self) -> NetworkResult<()>;
 
+    /// Probe whether the existing signaling WebSocket is truly alive.
+    ///
+    /// The default implementation only checks local state. WebSocket-backed
+    /// clients override this with an active Ping/Pong probe to catch half-open
+    /// sockets before network recovery decides whether to reconnect.
+    async fn probe_alive(&self, _timeout: Duration) -> NetworkResult<()> {
+        if self.is_connected() {
+            Ok(())
+        } else {
+            Err(NetworkError::ConnectionError(
+                "Signaling client is not connected".to_string(),
+            ))
+        }
+    }
+
     /// SendRegisterrequest（Register front stream process, using PeerToSignaling）
     async fn send_register_request(
         &self,
@@ -259,6 +275,10 @@ pub struct WebSocketSignalingClient {
     envelope_counter: tokio::sync::Mutex<u64>,
     /// Pending reply waiters (reply_for -> oneshot)
     pending_replies: Arc<tokio::sync::Mutex<HashMap<String, oneshot::Sender<SignalingEnvelope>>>>,
+    /// Pending WebSocket Pong waiters (ping payload -> oneshot)
+    pending_pongs: Arc<tokio::sync::Mutex<HashMap<Vec<u8>, oneshot::Sender<()>>>>,
+    /// Monotonic probe payload counter.
+    probe_counter: AtomicU64,
     /// Inbound envelope channel for unmatched messages (ActrRelay / push)
     inbound_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<SignalingEnvelope>>>,
     inbound_tx: tokio::sync::Mutex<mpsc::UnboundedSender<SignalingEnvelope>>,
@@ -291,6 +311,8 @@ impl WebSocketSignalingClient {
             stats: Arc::new(AtomicSignalingStats::default()),
             envelope_counter: tokio::sync::Mutex::new(0),
             pending_replies: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            pending_pongs: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            probe_counter: AtomicU64::new(0),
             inbound_rx: Arc::new(tokio::sync::Mutex::new(inbound_rx)),
             inbound_tx: tokio::sync::Mutex::new(inbound_tx),
             receiver_task: Arc::new(tokio::sync::Mutex::new(None)),
@@ -395,6 +417,7 @@ impl WebSocketSignalingClient {
     /// Reset inbound channel for a fresh session (useful after disconnects).
     async fn reset_inbound_channel(&self) {
         self.drop_pending_replies("inbound channel reset").await;
+        self.drop_pending_pongs("inbound channel reset").await;
 
         let (tx, rx) = mpsc::unbounded_channel();
         *self.inbound_tx.lock().await = tx;
@@ -411,6 +434,19 @@ impl WebSocketSignalingClient {
 
         if dropped > 0 {
             tracing::debug!(reason, dropped, "Dropping pending signaling reply waiters");
+        }
+    }
+
+    async fn drop_pending_pongs(&self, reason: &'static str) {
+        let dropped = {
+            let mut pending = self.pending_pongs.lock().await;
+            let dropped = pending.len();
+            pending.clear();
+            dropped
+        };
+
+        if dropped > 0 {
+            tracing::debug!(reason, dropped, "Dropping pending signaling pong waiters");
         }
     }
 
@@ -624,6 +660,7 @@ impl WebSocketSignalingClient {
         let connected = self.connected.clone();
         let state_tx = self.state_tx.clone();
         let last_pong = self.last_pong.clone();
+        let pending_pongs = self.pending_pongs.clone();
         let handle = tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
                 match msg {
@@ -671,9 +708,12 @@ impl WebSocketSignalingClient {
                             }
                         }
                     }
-                    Ok(tokio_tungstenite::tungstenite::Message::Pong(_)) => {
+                    Ok(tokio_tungstenite::tungstenite::Message::Pong(payload)) => {
                         tracing::debug!("Received pong");
                         last_pong.store(current_unix_secs(), Ordering::Release);
+                        if let Some(sender) = pending_pongs.lock().await.remove(&payload.to_vec()) {
+                            let _ = sender.send(());
+                        }
                     }
                     Ok(tokio_tungstenite::tungstenite::Message::Ping(_)) => {
                         tracing::debug!("Received ping");
@@ -694,6 +734,7 @@ impl WebSocketSignalingClient {
             connected.store(false, Ordering::Release);
             stats.disconnections.fetch_add(1, Ordering::Relaxed);
             let _ = state_tx.send(ConnectionState::Disconnected);
+            pending_pongs.lock().await.clear();
         });
 
         *self.receiver_task.lock().await = Some(handle);
@@ -921,6 +962,7 @@ impl SignalingClient for WebSocketSignalingClient {
 
     async fn disconnect(&self) -> NetworkResult<()> {
         self.drop_pending_replies("signaling disconnect").await;
+        self.drop_pending_pongs("signaling disconnect").await;
 
         // fetch exit sink and stream
         let mut sink_guard = self.ws_sink.lock().await;
@@ -949,6 +991,64 @@ impl SignalingClient for WebSocketSignalingClient {
         self.stats.disconnections.fetch_add(1, Ordering::Relaxed);
 
         Ok(())
+    }
+
+    async fn probe_alive(&self, timeout: Duration) -> NetworkResult<()> {
+        if !self.connected.load(Ordering::Acquire) {
+            return Err(NetworkError::ConnectionError(
+                "Signaling client is not connected".to_string(),
+            ));
+        }
+
+        let probe_id = self.probe_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        let payload =
+            format!("actr-signaling-probe-{probe_id}-{}", current_unix_secs()).into_bytes();
+        let (tx, rx) = oneshot::channel();
+        self.pending_pongs.lock().await.insert(payload.clone(), tx);
+
+        let send_result = {
+            let mut sink_guard = self.ws_sink.lock().await;
+            match sink_guard.as_mut() {
+                Some(sink) => sink
+                    .send(tokio_tungstenite::tungstenite::Message::Ping(
+                        payload.clone().into(),
+                    ))
+                    .await
+                    .map_err(|e| {
+                        NetworkError::ConnectionError(format!("Signaling probe ping failed: {e}"))
+                    }),
+                None => Err(NetworkError::ConnectionError(
+                    "Signaling probe failed: WebSocket sink is not available".to_string(),
+                )),
+            }
+        };
+
+        if let Err(e) = send_result {
+            self.pending_pongs.lock().await.remove(&payload);
+            self.connected.store(false, Ordering::Release);
+            let _ = self.state_tx.send(ConnectionState::Disconnected);
+            return Err(e);
+        }
+
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(())) => {
+                self.last_pong.store(current_unix_secs(), Ordering::Release);
+                Ok(())
+            }
+            Ok(Err(_)) => {
+                self.pending_pongs.lock().await.remove(&payload);
+                Err(NetworkError::ConnectionError(
+                    "Signaling probe pong waiter dropped".to_string(),
+                ))
+            }
+            Err(_) => {
+                self.pending_pongs.lock().await.remove(&payload);
+                Err(NetworkError::TimeoutError(format!(
+                    "Timed out waiting for signaling probe pong after {}ms",
+                    timeout.as_millis()
+                )))
+            }
+        }
     }
 
     #[cfg_attr(feature = "opentelemetry", tracing::instrument(skip_all))]
