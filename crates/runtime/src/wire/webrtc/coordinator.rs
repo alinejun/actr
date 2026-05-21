@@ -57,6 +57,8 @@ const ICE_RESTART_MAX_RETRIES: u32 = 10;
 const ICE_RESTART_TIMEOUT: Duration = Duration::from_secs(5);
 const ICE_RESTART_INITIAL_BACKOFF_MS: u64 = 5000; // 5s initial
 const ICE_RESTART_MAX_BACKOFF_MS: u64 = 10000; // 10s max (5s -> 10s -> 10s -> ...)
+const ICE_RESTART_MIN_OFFER_INTERVAL: Duration = Duration::from_secs(2);
+const ICE_GATHERING_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 const ICE_RESTART_MAX_TOTAL_DURATION: Duration = Duration::from_secs(60);
 const ICE_GATHERING_TIMEOUT: Duration = Duration::from_secs(10);
 const ROLE_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -191,11 +193,20 @@ struct PeerState {
     /// Wake an in-flight ICE restart task when the peer explicitly requests a retry.
     restart_wake: Arc<Notify>,
 
+    /// Last time we sent an ICE restart offer for this peer.
+    last_ice_restart_offer_at: Option<Instant>,
+
     /// Last state change timestamp (for health check)
     last_state_change: std::time::Instant,
 
     /// Current connection state (for health check)
     current_state: RTCPeerConnectionState,
+}
+
+enum IceRestartWaitOutcome {
+    Completed,
+    TimedOut,
+    Woken,
 }
 
 #[derive(Clone, Debug)]
@@ -1637,6 +1648,7 @@ impl WebRtcCoordinator {
                     ice_restart_attempts: 0,
                     restart_task_handle: None,
                     restart_wake: Arc::new(Notify::new()),
+                    last_ice_restart_offer_at: None,
                     last_state_change: std::time::Instant::now(),
                     current_state: RTCPeerConnectionState::New,
                 },
@@ -1869,6 +1881,7 @@ impl WebRtcCoordinator {
                     ice_restart_attempts: 0,
                     restart_task_handle: None,
                     restart_wake: Arc::new(Notify::new()),
+                    last_ice_restart_offer_at: None,
                     last_state_change: std::time::Instant::now(),
                     current_state: RTCPeerConnectionState::New,
                 },
@@ -3543,10 +3556,15 @@ impl WebRtcCoordinator {
                 tracing::debug!(
                     "⏳ ICE gathering in progress ({:?} elapsed), will retry after {:?}",
                     gathering_duration,
-                    delay
+                    ICE_GATHERING_RETRY_INTERVAL
                 );
-                Self::sleep_or_peer_restart_request(delay, &restart_wake, target, "ice_gathering")
-                    .await;
+                Self::sleep_or_peer_restart_request(
+                    ICE_GATHERING_RETRY_INTERVAL,
+                    &restart_wake,
+                    target,
+                    "ice_gathering",
+                )
+                .await;
                 continue; // Skip this iteration, wait for gathering to complete
             } else {
                 // Not gathering, reset timer
@@ -3554,6 +3572,50 @@ impl WebRtcCoordinator {
             }
 
             // ========== Both guards passed, safe to start an offer attempt ==========
+            let throttle_remaining = {
+                let peers_guard = peers.read().await;
+                match peers_guard.get(target) {
+                    Some(state) if state.webrtc_conn.session_id() == restart_session_id => {
+                        state.last_ice_restart_offer_at.and_then(|sent_at| {
+                            ICE_RESTART_MIN_OFFER_INTERVAL.checked_sub(sent_at.elapsed())
+                        })
+                    }
+                    Some(state) => {
+                        tracing::debug!(
+                            "⏭️ Stopping stale ICE restart before offer throttle check for serial={}, task_session_id={}, active_session_id={}",
+                            target,
+                            restart_session_id,
+                            state.webrtc_conn.session_id()
+                        );
+                        return Ok(true);
+                    }
+                    None => {
+                        tracing::warn!(
+                            "🚫 Peer state removed before ICE restart offer throttle check for serial={}, session_id={}",
+                            target,
+                            restart_session_id
+                        );
+                        return Ok(true);
+                    }
+                }
+            };
+
+            if let Some(remaining) = throttle_remaining {
+                tracing::debug!(
+                    "⏳ Throttling ICE restart offer to serial={} for {:?}",
+                    target,
+                    remaining
+                );
+                Self::sleep_or_peer_restart_request(
+                    remaining,
+                    &restart_wake,
+                    target,
+                    "offer_throttle",
+                )
+                .await;
+                continue;
+            }
+
             let attempt = {
                 let mut peers_guard = peers.write().await;
                 let state = match peers_guard.get_mut(target) {
@@ -3593,6 +3655,7 @@ impl WebRtcCoordinator {
                 // wait_for_restart_completion checks this flag, so we must set it
                 // before each attempt to avoid false positive success detection.
                 state.ice_restart_inflight = true;
+                state.last_ice_restart_offer_at = Some(Instant::now());
 
                 state.ice_restart_attempts += 1;
                 state.ice_restart_attempts
@@ -3693,17 +3756,43 @@ impl WebRtcCoordinator {
             );
 
             // Wait for restart completion
-            let success = Self::wait_for_restart_completion_static(
+            let wait_outcome = Self::wait_for_restart_completion_static(
                 peers,
                 target,
                 restart_session_id,
                 ICE_RESTART_TIMEOUT,
+                &restart_wake,
             )
             .await;
 
-            if success {
-                restart_ok = true;
-                break;
+            match wait_outcome {
+                IceRestartWaitOutcome::Completed => {
+                    restart_ok = true;
+                    break;
+                }
+                IceRestartWaitOutcome::Woken => {
+                    tracing::info!(
+                        "🔔 ICE restart completion wait interrupted for serial={}, re-evaluating retry state",
+                        target
+                    );
+
+                    let mut peers_guard = peers.write().await;
+                    if let Some(state) = peers_guard.get_mut(target) {
+                        if state.webrtc_conn.session_id() == restart_session_id {
+                            state.ice_restart_inflight = false;
+                        } else {
+                            tracing::debug!(
+                                "⏭️ Stopping stale ICE restart after wake for serial={}, task_session_id={}, active_session_id={}",
+                                target,
+                                restart_session_id,
+                                state.webrtc_conn.session_id()
+                            );
+                            return Ok(true);
+                        }
+                    }
+                    continue;
+                }
+                IceRestartWaitOutcome::TimedOut => {}
             }
 
             tracing::warn!(
@@ -3763,7 +3852,8 @@ impl WebRtcCoordinator {
         target: &ActrId,
         restart_session_id: u64,
         timeout: Duration,
-    ) -> bool {
+        restart_wake: &Notify,
+    ) -> IceRestartWaitOutcome {
         let mut interval = tokio::time::interval(Duration::from_millis(100));
         let timeout_sleep = tokio::time::sleep(timeout);
         tokio::pin!(timeout_sleep);
@@ -3771,7 +3861,10 @@ impl WebRtcCoordinator {
         loop {
             tokio::select! {
                 _ = &mut timeout_sleep => {
-                    return false;
+                    return IceRestartWaitOutcome::TimedOut;
+                }
+                _ = restart_wake.notified() => {
+                    return IceRestartWaitOutcome::Woken;
                 }
                 _ = interval.tick() => {
                     // Use read lock to check status (allows concurrent access)
@@ -3785,7 +3878,7 @@ impl WebRtcCoordinator {
                                     restart_session_id,
                                     state.webrtc_conn.session_id()
                                 );
-                                return true;
+                                return IceRestartWaitOutcome::Completed;
                             }
                             // SUCCESS = answer has cleared the in-flight marker and
                             // the peer connection is still Connected.
@@ -3796,7 +3889,7 @@ impl WebRtcCoordinator {
                                         RTCPeerConnectionState::Connected
                                     )
                             }
-                            None => return true,
+                            None => return IceRestartWaitOutcome::Completed,
                         }
                     };
 
@@ -3808,7 +3901,7 @@ impl WebRtcCoordinator {
                                 state.ice_restart_attempts = 0;
                             }
                         }
-                        return true;
+                        return IceRestartWaitOutcome::Completed;
                     }
                 }
             }
