@@ -518,6 +518,11 @@ impl NetworkEventProcessor for DefaultNetworkEventProcessor {
     /// - 不进行防抖检查（主动调用总是执行）
     /// - 适用于应用生命周期管理，而非网络事件响应
     async fn cleanup_connections(&self) -> Result<(), String> {
+        let _cleanup_guard = self
+            .webrtc_coordinator
+            .as_ref()
+            .map(|coordinator| coordinator.cleanup_guard());
+
         tracing::info!("🧹 Manually cleaning up all connections...");
 
         // Step 1: 清理待处理的 ICE 重启尝试

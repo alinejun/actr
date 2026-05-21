@@ -20,7 +20,7 @@ use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 /// Type alias for media track storage (track_id → (Track, Sender))
 type MediaTracks = Arc<RwLock<HashMap<String, (Arc<TrackLocalStaticRTP>, Arc<RTCRtpSender>)>>>;
 
-const PEER_CONNECTION_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+const PEER_CONNECTION_CLOSE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// WebRtcConnection - WebRTC P2P Connect
 #[derive(Clone)]

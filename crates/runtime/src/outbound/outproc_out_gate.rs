@@ -560,6 +560,8 @@ impl OutprocOutGate {
 
     async fn preflight_send(&self, target: &ActrId, dest: &Dest) -> Result<(), ProtocolError> {
         if let Some(coordinator) = &self.webrtc_coordinator {
+            coordinator.wait_cleanup_complete().await;
+
             if let Some(status) = coordinator.peer_recovery_status(target).await {
                 if status.is_timed_out() {
                     return Err(self

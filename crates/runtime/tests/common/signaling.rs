@@ -24,6 +24,8 @@ pub struct TestSignalingServer {
     ice_restart_request_count: Arc<AtomicU32>,
     /// Control: when true, server will accept connections but not forward messages
     pause_forwarding: Arc<AtomicBool>,
+    /// Test hook: drop the next N ICE candidate relay messages.
+    ice_candidate_drop_count: Arc<AtomicU32>,
     connection_count: Arc<AtomicU32>,
     disconnection_count: Arc<AtomicU32>,
     #[allow(dead_code)]
@@ -45,6 +47,7 @@ impl TestSignalingServer {
         let disconnection_count = Arc::new(AtomicU32::new(0));
         let received_messages = Arc::new(Mutex::new(Vec::new()));
         let pause_forwarding = Arc::new(AtomicBool::new(false));
+        let ice_candidate_drop_count = Arc::new(AtomicU32::new(0));
 
         // Clone for task
         let is_running_clone = is_running.clone();
@@ -53,6 +56,7 @@ impl TestSignalingServer {
         let ice_restart_request_count_clone = ice_restart_request_count.clone();
         let received_messages_clone = received_messages.clone();
         let pause_forwarding_clone = pause_forwarding.clone();
+        let ice_candidate_drop_count_clone = ice_candidate_drop_count.clone();
         let connection_count_clone = connection_count.clone();
         let disconnection_count_clone = disconnection_count.clone();
 
@@ -67,6 +71,7 @@ impl TestSignalingServer {
                 ice_restart_request_count_clone,
                 received_messages_clone,
                 pause_forwarding_clone,
+                ice_candidate_drop_count_clone,
                 connection_count_clone,
                 disconnection_count_clone,
             )
@@ -85,6 +90,7 @@ impl TestSignalingServer {
             ice_restart_request_count,
             received_messages,
             pause_forwarding,
+            ice_candidate_drop_count,
             connection_count,
             disconnection_count,
         })
@@ -99,6 +105,7 @@ impl TestSignalingServer {
         ice_restart_request_count: Arc<AtomicU32>,
         received_messages: Arc<Mutex<Vec<SignalingEnvelope>>>,
         pause_forwarding: Arc<AtomicBool>,
+        ice_candidate_drop_count: Arc<AtomicU32>,
         connection_count: Arc<AtomicU32>,
         disconnection_count: Arc<AtomicU32>,
     ) {
@@ -124,6 +131,7 @@ impl TestSignalingServer {
                         let ice_restart_request_count_clone = ice_restart_request_count.clone();
                         let received_messages_clone = received_messages.clone();
                         let pause_forwarding_clone = pause_forwarding.clone();
+                        let ice_candidate_drop_count_clone = ice_candidate_drop_count.clone();
                         let disconnection_count_clone = disconnection_count.clone();
 
                         tokio::spawn(async move {
@@ -156,6 +164,7 @@ impl TestSignalingServer {
                                                                 &ice_restart_offer_count_clone,
                                                                 &ice_restart_request_count_clone,
                                                                 &pause_forwarding_clone,
+                                                                &ice_candidate_drop_count_clone,
                                                             ).await;
                                                         }
                                                     }
@@ -195,6 +204,7 @@ impl TestSignalingServer {
         ice_restart_offer_count: &Arc<AtomicU32>,
         ice_restart_request_count: &Arc<AtomicU32>,
         pause_forwarding: &Arc<AtomicBool>,
+        ice_candidate_drop_count: &Arc<AtomicU32>,
     ) {
         if let Some(actr_protocol::signaling_envelope::Flow::ActrRelay(relay)) =
             envelope.flow.as_ref()
@@ -212,6 +222,7 @@ impl TestSignalingServer {
                     );
                 }
             }
+
             if let Some(actr_protocol::actr_relay::Payload::IceRestartRequest(_)) =
                 relay.payload.as_ref()
             {
@@ -226,6 +237,20 @@ impl TestSignalingServer {
             if pause_forwarding.load(Ordering::Acquire) {
                 // Return early - do not reply to RoleNegotiation and do not Forward
                 return;
+            }
+
+            if let Some(actr_protocol::actr_relay::Payload::IceCandidate(_)) =
+                relay.payload.as_ref()
+            {
+                if ice_candidate_drop_count
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                        if count > 0 { Some(count - 1) } else { None }
+                    })
+                    .is_ok()
+                {
+                    tracing::warn!("🧪 Dropping test ICE candidate relay");
+                    return;
+                }
             }
 
             // Handle RoleNegotiation: server decides roles and notifies BOTH parties
@@ -350,6 +375,28 @@ impl TestSignalingServer {
     pub fn resume_forwarding(&self) {
         tracing::info!("▶️  Resuming message forwarding");
         self.pause_forwarding.store(false, Ordering::Release);
+    }
+
+    /// Drop the next N ICE candidate relay messages.
+    ///
+    /// This is a test-only hook for reproducing a post-cleanup negotiation
+    /// where SDP arrives but trickle ICE is interrupted.
+    pub fn drop_next_ice_candidates(&self, count: u32) {
+        tracing::warn!(
+            "🧪 Dropping the next {} ICE candidate relay message(s)",
+            count
+        );
+        self.ice_candidate_drop_count.store(count, Ordering::SeqCst);
+    }
+
+    /// Drop the next N ICE candidate relay messages for a bounded duration.
+    pub fn drop_next_ice_candidates_for(&self, count: u32, duration: Duration) {
+        self.drop_next_ice_candidates(count);
+        let ice_candidate_drop_count = self.ice_candidate_drop_count.clone();
+        tokio::spawn(async move {
+            sleep(duration).await;
+            ice_candidate_drop_count.store(0, Ordering::SeqCst);
+        });
     }
 
     /// Get message count
