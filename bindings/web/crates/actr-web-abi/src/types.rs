@@ -52,6 +52,18 @@ pub struct CredentialEvent {
     pub new_expiry: Timestamp,
 }
 
+/// Lowered from WIT `record data-stream`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataStream {
+    #[serde(rename = "stream-id")]
+    pub stream_id: String,
+    pub sequence: u64,
+    pub payload: Vec<u8>,
+    pub metadata: Vec<MetadataEntry>,
+    #[serde(rename = "timestamp-ms")]
+    pub timestamp_ms: Option<i64>,
+}
+
 /// Lowered from WIT `record dependency-not-found-payload`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencyNotFoundPayload {
@@ -67,6 +79,13 @@ pub struct ErrorEvent {
     pub category: ErrorCategory,
     pub context: String,
     pub timestamp: Timestamp,
+}
+
+/// Lowered from WIT `record metadata-entry`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetadataEntry {
+    pub key: String,
+    pub value: String,
 }
 
 /// Lowered from WIT `record peer-event`.
@@ -147,4 +166,19 @@ pub enum ErrorCategory {
     SignalingFailure,
     #[serde(rename = "transport-failure")]
     TransportFailure,
+}
+
+/// Lowered from WIT `variant payload-type`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PayloadType {
+    #[serde(rename = "rpc-reliable")]
+    RpcReliable,
+    #[serde(rename = "rpc-signal")]
+    RpcSignal,
+    #[serde(rename = "stream-reliable")]
+    StreamReliable,
+    #[serde(rename = "stream-latency-first")]
+    StreamLatencyFirst,
+    #[serde(rename = "media-rtp")]
+    MediaRtp,
 }
