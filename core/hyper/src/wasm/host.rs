@@ -553,7 +553,7 @@ impl WasmHost {
         let bindings = ActrWorkloadGuest::instantiate_async(&mut store, &self.component, &linker)
             .await
             .map_err(|e| {
-                WasmError::LoadFailed(format!("Component instantiate_async failed: {e}"))
+                WasmError::LoadFailed(format!("Component instantiate_async failed: {e:#}"))
             })?;
 
         tracing::info!("wasm Component instantiated");
