@@ -1500,6 +1500,7 @@ impl Inner {
                     Duration::from_secs(30)
                 };
                 let ais_endpoint_for_heartbeat = self.config.ais_endpoint.clone();
+                let realm_secret_for_heartbeat = self.config.realm_secret.clone();
                 let heartbeat_handle = tokio::spawn(crate::lifecycle::heartbeat::heartbeat_task(
                     shutdown,
                     client,
@@ -1509,6 +1510,7 @@ impl Inner {
                     heartbeat_interval,
                     register_request_for_heartbeat,
                     ais_endpoint_for_heartbeat,
+                    realm_secret_for_heartbeat,
                     node_hook_callback.clone(),
                 ));
                 task_handles.push(heartbeat_handle);
