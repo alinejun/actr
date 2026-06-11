@@ -406,28 +406,40 @@ Android/Swift 端上提供原始日志，Rust 把 `network_snapshot`、`lifecycl
 
 ## L5 移动端端上测试
 
-| Case ID | 平台 | 优先级 | 场景 | 操作 | 期望 |
-|---|---|---|---|---|---|
-| E2E-A01 | Android | P0 | 冷启动在线/离线 | 在线、飞行模式分别启动 | 在线可 RPC，离线不挂 |
-| E2E-A02 | Android | P0 | Wi-Fi -> 蜂窝 | RPC 后关闭 Wi-Fi | 最终可继续或 retry 成功 |
-| E2E-A03 | Android | P0 | 蜂窝 -> Wi-Fi | 蜂窝在线后打开 Wi-Fi | 不误 offline |
-| E2E-A04 | Android | P0 | 飞行模式开关 | RPC 中开关飞行模式 | offline bounded failure，恢复后成功 |
-| E2E-A05 | Android | P0 | 前后台短/长恢复 | 后台 5s/60s 再前台 | 短后台不误 cleanup，长后台可 rebuild |
-| E2E-A06 | Android | P0 | Activity/Compose 重建 | 旋转/重建页面 | 不重复 monitor，不重复建连 |
-| E2E-A07 | Android | P0 | shutdown 后 callback | disconnect 后切网 | 不挂，不调用旧 node 造成问题 |
-| E2E-I01 | iOS | P0 | 冷启动在线/离线 | 在线、飞行模式分别启动 | 在线可 RPC，离线不挂 |
-| E2E-I02 | iOS | P0 | Wi-Fi -> 蜂窝 | RPC 后关闭 Wi-Fi | unsatisfied gap 后恢复 |
-| E2E-I03 | iOS | P0 | 蜂窝 -> Wi-Fi | 打开 Wi-Fi 切回 | 最终可 RPC |
-| E2E-I04 | iOS | P0 | 前后台短/长恢复 | 后台 5s/60s 再前台 | 短后台不误 cleanup，长后台可 rebuild |
-| E2E-I05 | iOS | P0 | 多 Scene/ViewModel | 多窗口/页面重复创建 | 不重复 observer/monitor storm |
-| E2E-I06 | iOS | P0 | shutdown 后 path callback | stop 后切网 | 不挂，不污染新 node |
-| E2E-B01 | 双端 | P0 | 双端同时切网 | 手机和桌面同时断/恢复 | 不 offer storm，最终可 RPC |
-| E2E-A08 | Android | P1 | 息屏亮屏 | RPC 后息屏/亮屏 | 不直接 cleanup；回前台后按 lifecycle 恢复 |
-| E2E-A09 | Android | P1 | VPN/captive portal | 开关 VPN/连接无互联网 Wi-Fi | 错误可解释，恢复后成功 |
-| E2E-A10 | Android | P1 | Doze/锁屏 | 锁屏进入省电后切网 | 解锁/前台后最终恢复 |
-| E2E-I07 | iOS | P1 | 锁屏亮屏 | RPC 后锁屏/亮屏 | 不把亮屏误报 foreground recovery |
-| E2E-I08 | iOS | P1 | VPN/热点/Low Data Mode | 开关 VPN/热点/低数据 | 不破坏连接，必要时恢复 |
-| E2E-B02 | 双端 | P1 | 长时间稳定性 | 30min 多轮切网/前后台/发送 | 连接数/任务数/内存不持续增长 |
+L5 端上测试必须显式覆盖三个维度：
+
+- WebRTC 角色：移动端作为 `offerer` 和 `answerer` 都要跑；如果平台能力或测试夹具暂时只能跑单角色，必须在测试报告中标记缺口。
+- 移动端操作方向：`mobile -> server` 表示移动端主动发送；`server -> mobile` 表示移动端接收服务端主动发送。两者都要验证 RPC。
+- DataStream：核心 P0 网络/生命周期场景必须覆盖双向 DataStream；无法覆盖时要拆出同名缺口，不应只用 RPC 代替。
+
+| Case ID | 平台 | 优先级 | 场景 | 操作 | 角色覆盖 | 移动端收/发覆盖 | DataStream 覆盖 | 期望 |
+|---|---|---|---|---|---|---|---|---|
+| E2E-A01 | Android | P0 | 冷启动在线/离线 | 在线、飞行模式分别启动 | offerer + answerer | 在线：`mobile -> server`、`server -> mobile` RPC；离线：两方向 bounded failure | 在线双向 baseline；离线不挂 | 在线可 RPC/DataStream；离线不挂，错误可解释 |
+| E2E-A02 | Android | P0 | Wi-Fi -> 蜂窝 | RPC/DataStream 发送中关闭 Wi-Fi | offerer + answerer | 移动端发送、移动端接收都要跑 | 双向 in-flight DataStream | 最终可继续或 retry 成功，pending 清零 |
+| E2E-A03 | Android | P0 | 蜂窝 -> Wi-Fi | 蜂窝在线后打开 Wi-Fi | offerer + answerer | 移动端发送、移动端接收都要跑 | 双向 DataStream smoke | 不误 offline，最终可 RPC/DataStream |
+| E2E-A04 | Android | P0 | 飞行模式开关 | RPC/DataStream 中开关飞行模式 | offerer + answerer | 移动端发送、移动端接收都要跑 | 双向 in-flight DataStream | offline bounded failure；恢复后 RPC/DataStream 成功 |
+| E2E-A05 | Android | P0 | 前后台短/长恢复 | 后台 5s/60s 再前台 | offerer + answerer | 移动端发送、移动端接收都要跑 | 双向 in-flight DataStream | 短后台不误 cleanup；长后台可 rebuild；恢复后双向成功 |
+| E2E-A06 | Android | P0 | Activity/Compose 重建 | 旋转/重建页面后继续通信 | offerer + answerer | 重建前后分别验证移动端发送、接收 | 双向 DataStream smoke | 不重复 monitor，不重复建连，旧 handle 不污染新 node |
+| E2E-A07 | Android | P0 | shutdown 后 callback | disconnect 后切网，再新建 node 通信 | 新 node 覆盖 offerer + answerer | 旧 handle 事件 bounded；新 node 双向 RPC | 新 node 双向 DataStream smoke | 不挂，不调用旧 node 造成问题，新 node 可正常收发 |
+| E2E-I01 | iOS | P0 | 冷启动在线/离线 | 在线、飞行模式分别启动 | offerer + answerer | 在线：`mobile -> server`、`server -> mobile` RPC；离线：两方向 bounded failure | 在线双向 baseline；离线不挂 | 在线可 RPC/DataStream；离线不挂，错误可解释 |
+| E2E-I02 | iOS | P0 | Wi-Fi -> 蜂窝 | RPC/DataStream 发送中关闭 Wi-Fi | offerer + answerer | 移动端发送、移动端接收都要跑 | 双向 in-flight DataStream | unsatisfied gap 后恢复；pending 清零 |
+| E2E-I03 | iOS | P0 | 蜂窝 -> Wi-Fi | 打开 Wi-Fi 切回 | offerer + answerer | 移动端发送、移动端接收都要跑 | 双向 DataStream smoke | 不误 offline，最终可 RPC/DataStream |
+| E2E-I04 | iOS | P0 | 前后台短/长恢复 | 后台 5s/60s 再前台 | offerer + answerer | 移动端发送、移动端接收都要跑 | 双向 in-flight DataStream | 短后台不误 cleanup；长后台可 rebuild；恢复后双向成功 |
+| E2E-I05 | iOS | P0 | 多 Scene/ViewModel | 多窗口/页面重复创建后继续通信 | offerer + answerer | 多 Scene 下移动端发送、接收都要跑 | 双向 DataStream smoke | 不重复 observer/monitor storm，旧 scene 不污染新 scene |
+| E2E-I06 | iOS | P0 | shutdown 后 path callback | stop 后切网，再新建 node 通信 | 新 node 覆盖 offerer + answerer | 旧 handle 事件 bounded；新 node 双向 RPC | 新 node 双向 DataStream smoke | 不挂，不污染新 node，新 node 可正常收发 |
+| E2E-B01 | 双端 | P0 | 双端同时切网 | 手机和桌面同时断/恢复，同时触发发送 | 移动端 offerer + answerer | 双端同时 `mobile -> server`、`server -> mobile` RPC | 双向 in-flight DataStream | 不 offer storm，最终可 RPC/DataStream |
+| E2E-A08 | Android | P1 | 息屏亮屏 | RPC/DataStream 后息屏/亮屏 | offerer + answerer | 移动端发送、移动端接收都要跑 | 双向 DataStream smoke | 不直接 cleanup；回前台后按 lifecycle 恢复 |
+| E2E-A09 | Android | P1 | VPN/captive portal | 开关 VPN/连接无互联网 Wi-Fi | offerer + answerer | 移动端发送、移动端接收都要跑 | DataStream 失败/恢复各一次 | 错误可解释，网络恢复后双向成功 |
+| E2E-A10 | Android | P1 | Doze/锁屏 | 锁屏进入省电后切网 | offerer + answerer | 解锁前后验证移动端发送、接收 | 双向 DataStream smoke | 解锁/前台后最终恢复，不泄漏 pending |
+| E2E-I07 | iOS | P1 | 锁屏亮屏 | RPC/DataStream 后锁屏/亮屏 | offerer + answerer | 移动端发送、移动端接收都要跑 | 双向 DataStream smoke | 不把亮屏误报 foreground recovery |
+| E2E-I08 | iOS | P1 | VPN/热点/Low Data Mode | 开关 VPN/热点/低数据 | offerer + answerer | 移动端发送、移动端接收都要跑 | DataStream 失败/恢复各一次 | 不破坏连接，必要时恢复 |
+| E2E-B02 | 双端 | P1 | 长时间稳定性 | 30min 多轮切网/前后台/发送 | offerer + answerer | 周期性执行移动端发送、接收 | 周期性双向 DataStream | 连接数/任务数/内存不持续增长 |
+
+端上执行结果建议按以下汇总表回填，避免“跑了场景但漏了角色/方向/载荷”：
+
+| Case ID | 平台 | 角色 | RPC `mobile -> server` | RPC `server -> mobile` | DataStream `mobile -> server` | DataStream `server -> mobile` | 结果 | 备注 |
+|---|---|---|---|---|---|---|---|---|
+| 示例 | Android/iOS | offerer/answerer | pass/fail/skip | pass/fail/skip | pass/fail/skip | pass/fail/skip | pass/fail | skip 必须写原因 |
 
 ## 测试分工
 
