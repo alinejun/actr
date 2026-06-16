@@ -45,7 +45,7 @@ object RemoteServiceRegistry {
                 ActrType(
                     manufacturer = "actrium",
                     name = "DuplexStreamService",
-                    version = "0.1.0",
+                    version = "1.0.0",
                 ),
             "echo.Echo" to ActrType(manufacturer = "actrium", name = "EchoService", version = "1.0.0"),
         )
@@ -129,7 +129,7 @@ object UnifiedDispatcher {
                 // Get target actor type and discover it
                 val actrType =
                     RemoteServiceRegistry.getActorType(routeKey)
-                        ?: throw IllegalArgumentException("Unknown remote route: $routeKey")
+                        ?: throw io.actrium.actr.ActrException.UnknownRoute("Unknown remote route: $routeKey")
 
                 val targetId = resolveRemoteActor(ctx, actrType)
 
@@ -147,14 +147,20 @@ object UnifiedDispatcher {
                             30000L,
                         )
                     } catch (retry: Exception) {
-                        throw IllegalStateException(
-                            "Remote route $routeKey failed after rediscovery: ${retry.message}",
-                            retry,
+                        // Re-throw ActrException directly so it crosses the UniFFI
+                        // callback boundary as a declared error (ActrError) rather
+                        // than UNIFFI_CALL_UNEXPECTED_ERROR which panics the Rust
+                        // inproc receive loop and kills the entire Shell→Guest path.
+                        if (retry is io.actrium.actr.ActrException) {
+                            throw retry
+                        }
+                        throw io.actrium.actr.ActrException.Internal(
+                            "Remote route $routeKey failed after rediscovery: ${retry.message}"
                         )
                     }
                 }
             }
-            else -> throw IllegalArgumentException("Unknown route key: $routeKey")
+            else -> throw io.actrium.actr.ActrException.UnknownRoute("Unknown route key: $routeKey")
         }
     }
 }
