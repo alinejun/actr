@@ -330,6 +330,8 @@ pub async fn build_register_ok(
         signing_key_id: state.ais_signing_key_id(),
         psk: Some(format!("mock-psk-{serial:016x}").into_bytes().into()),
         psk_expires_at: Some(chrono::Utc::now().timestamp() + 30 * 86400),
+        renewal_token: None,
+        renewal_token_expires_at: None,
     }
 }
 
