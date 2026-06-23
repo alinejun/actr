@@ -53,7 +53,7 @@ impl TestEnv {
 }
 
 async fn start_embedded_signer(
-    psk: &str,
+    shared_key: &str,
     sqlite_path: &Path,
 ) -> (String, JoinHandle<()>, oneshot::Sender<()>) {
     let service_config = SignerServiceConfig::default();
@@ -72,7 +72,7 @@ async fn start_embedded_signer(
     let service = create_grpc_service(
         storage,
         MemoryStorage::new(),
-        psk.to_string(),
+        shared_key.to_string(),
         service_config.tolerance_seconds,
     );
 
@@ -97,7 +97,7 @@ async fn start_embedded_signer(
     for _ in 0..40 {
         let cfg = GrpcClientConfig {
             endpoint: endpoint.clone(),
-            actrix_shared_key: psk.to_string(),
+            actrix_shared_key: shared_key.to_string(),
             timeout_seconds: 2,
             enable_tls: false,
             tls_domain: None,
@@ -127,7 +127,7 @@ async fn setup_test_environment() -> TestEnv {
 
     let issuer_temp_dir = TempDir::new().expect("Failed to create issuer temp dir");
     let signer_temp_dir = TempDir::new().expect("Failed to create signer temp dir");
-    let shared_key = "test-psk-key".to_string();
+    let shared_key = "test-shared-key".to_string();
     let (endpoint, signer_handle, signer_shutdown_tx) =
         start_embedded_signer(&shared_key, signer_temp_dir.path()).await;
 
@@ -164,6 +164,9 @@ async fn setup_test_environment() -> TestEnv {
 fn default_issuer_config(temp_dir: &TempDir) -> IssuerConfig {
     IssuerConfig {
         token_ttl_secs: 3600,
+        renewal_token_ttl_secs: 24 * 60 * 60,
+        renewal_rotation_window_secs: 60 * 60,
+        renewal_token_secret: vec![0; 32],
         signaling_heartbeat_interval_secs: 30,
         key_refresh_interval_secs: 3600,
         key_storage_file: temp_dir.path().join("issuer_keys.db"),
@@ -188,7 +191,6 @@ fn linked_register_request() -> RegisterRequest {
         ws_address: None,
         manifest_raw: None,
         mfr_signature: None,
-        psk_token: None,
         target: None,
         auth_mode: Some(RegisterAuthMode::Linked as i32),
         runner_signature: None,
@@ -377,7 +379,6 @@ async fn test_register_route_package_with_mfr_identity_succeeds() {
         ws_address: None,
         manifest_raw: Some(prost::bytes::Bytes::from(manifest_raw)),
         mfr_signature: None,
-        psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
@@ -420,7 +421,6 @@ async fn test_register_route_unspecified_auth_mode_uses_package_identity() {
         ws_address: None,
         manifest_raw: Some(prost::bytes::Bytes::from(manifest_raw)),
         mfr_signature: None,
-        psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: None,
         runner_signature: None,
@@ -468,7 +468,6 @@ async fn test_register_route_published_package_without_manifest_raw_is_rejected(
         ws_address: None,
         manifest_raw: None,
         mfr_signature: None,
-        psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
@@ -515,7 +514,6 @@ async fn test_register_route_published_package_without_target_is_rejected() {
         ws_address: None,
         manifest_raw: Some(prost::bytes::Bytes::from(manifest_raw)),
         mfr_signature: None,
-        psk_token: None,
         target: None,
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
@@ -587,7 +585,6 @@ async fn test_published_package_manifest_hash_mismatch_does_not_fall_back_to_pat
         ws_address: None,
         manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes.clone())),
         mfr_signature: Some(prost::bytes::Bytes::from(sig_bytes)),
-        psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
@@ -640,7 +637,6 @@ async fn test_register_route_package_without_mfr_identity_is_still_rejected() {
             "wasm32-wasip1",
         ))),
         mfr_signature: None,
-        psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
@@ -764,7 +760,6 @@ async fn test_package_registration_without_mfr_identity_is_still_rejected() {
             "wasm32-wasip1",
         ))),
         mfr_signature: None,
-        psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
@@ -824,7 +819,6 @@ async fn test_end_to_end_credential_flow() {
         ws_address: None,
         manifest_raw: Some(prost::bytes::Bytes::from(manifest_raw.clone())),
         mfr_signature: None,
-        psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
@@ -894,7 +888,6 @@ async fn test_end_to_end_credential_flow() {
             ws_address: None,
             manifest_raw: Some(prost::bytes::Bytes::from(manifest_raw.clone())),
             mfr_signature: None,
-            psk_token: None,
             target: Some("wasm32-wasip1".to_string()),
             auth_mode: Some(RegisterAuthMode::Package as i32),
             runner_signature: None,
@@ -1018,7 +1011,6 @@ async fn test_issuer_creation_fails_with_wrong_shared_key() {
         ws_address: None,
         manifest_raw: None,
         mfr_signature: None,
-        psk_token: None,
         target: None,
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
@@ -1311,7 +1303,6 @@ async fn test_path2_missing_runner_signature_rejected() {
         ws_address: None,
         manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes)),
         mfr_signature: Some(prost::bytes::Bytes::from(sig_bytes)),
-        psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
@@ -1368,7 +1359,6 @@ async fn test_path2_runner_nonce_replay_rejected() {
         ws_address: None,
         manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes.clone())),
         mfr_signature: Some(prost::bytes::Bytes::from(sig_bytes)),
-        psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
@@ -1468,7 +1458,6 @@ async fn test_path2_historical_retired_key_passes() {
         ws_address: None,
         manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes.clone())),
         mfr_signature: Some(prost::bytes::Bytes::from(sig_bytes)),
-        psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
@@ -1554,7 +1543,6 @@ async fn test_path2_revoked_key_rejected() {
         ws_address: None,
         manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes.clone())),
         mfr_signature: Some(prost::bytes::Bytes::from(sig_bytes)),
-        psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
@@ -1625,7 +1613,6 @@ async fn test_path2_identity_mismatch_rejected() {
         ws_address: None,
         manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes.clone())),
         mfr_signature: Some(prost::bytes::Bytes::from(sig_bytes)),
-        psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
         runner_signature: None,
