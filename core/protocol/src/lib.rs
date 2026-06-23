@@ -31,6 +31,7 @@ pub mod actr_ext;
 pub mod error;
 pub mod message;
 pub mod name;
+pub mod runner_auth;
 pub mod turn;
 pub mod uri;
 
@@ -39,6 +40,7 @@ pub use actr_ext::*;
 pub use error::*;
 pub use message::RpcRequest;
 pub use name::*;
+pub use runner_auth::*;
 
 // Re-export prost and prost_types for downstream crates
 // This ensures a single source of truth for protobuf dependencies

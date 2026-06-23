@@ -489,6 +489,56 @@ impl WorkloadPackage {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunnerRegistrationAuth {
+    pub signature: Vec<u8>,
+    pub signed_at: u64,
+    pub nonce: Vec<u8>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl RunnerRegistrationAuth {
+    pub fn sign(
+        signing_key: &ed25519_dalek::SigningKey,
+        realm_id: u32,
+        actr_type: &actr_protocol::ActrType,
+        target: &str,
+        manifest_raw: &[u8],
+    ) -> HyperResult<Self> {
+        use ed25519_dalek::Signer as _;
+        use rand::RngCore as _;
+        use sha2::{Digest as _, Sha256};
+
+        let signed_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| HyperError::Runtime(format!("system clock before Unix epoch: {e}")))?
+            .as_secs();
+
+        let mut nonce = vec![0u8; 32];
+        rand::thread_rng().fill_bytes(&mut nonce);
+
+        let manifest_sha256 = Sha256::digest(manifest_raw);
+        let manifest_sha256_hex = actr_protocol::lower_hex(&manifest_sha256);
+        let payload =
+            actr_protocol::build_runner_register_payload(actr_protocol::RunnerRegisterPayload {
+                realm_id,
+                actr_type,
+                target,
+                manifest_sha256_hex: &manifest_sha256_hex,
+                runner_signed_at: signed_at,
+                runner_nonce: &nonce,
+            });
+        let signature = signing_key.sign(payload.as_bytes()).to_bytes().to_vec();
+
+        Ok(Self {
+            signature,
+            signed_at,
+            nonce,
+        })
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 /// Result of verifying a package and preparing a runtime workload from it.
 pub(crate) struct LoadedWorkload {
     /// Verified package retained for downstream bootstrap and storage
@@ -865,6 +915,19 @@ impl Node<Attached> {
     /// exports when a package-backed attach was used. Linked attachments
     /// register from the runtime config's actor metadata instead.
     pub async fn register(self, ais_endpoint: &str) -> HyperResult<Node<Registered>> {
+        self.register_with_runner_auth(ais_endpoint, None).await
+    }
+
+    /// Register with AIS and optionally attach runner authorization for
+    /// unpublished package registrations.
+    ///
+    /// The supplied [`RunnerRegistrationAuth`] is used only for package-backed
+    /// first registration. Linked registration and PSK renewal ignore it.
+    pub async fn register_with_runner_auth(
+        self,
+        ais_endpoint: &str,
+        runner_auth: Option<RunnerRegistrationAuth>,
+    ) -> HyperResult<Node<Registered>> {
         let attachment = self
             .attachment
             .as_ref()
@@ -877,7 +940,8 @@ impl Node<Attached> {
         } else {
             None
         };
-        self.register_with(ais_endpoint, service_spec).await
+        self.register_with_inner(ais_endpoint, service_spec, runner_auth)
+            .await
     }
 
     /// Register with AIS using an explicit `service_spec`.
@@ -886,9 +950,19 @@ impl Node<Attached> {
     /// package-backed attachments. Linked attachments use the supplied
     /// `service_spec` together with the runtime config's actor metadata.
     pub async fn register_with(
+        self,
+        ais_endpoint: &str,
+        service_spec: Option<ServiceSpec>,
+    ) -> HyperResult<Node<Registered>> {
+        self.register_with_inner(ais_endpoint, service_spec, None)
+            .await
+    }
+
+    async fn register_with_inner(
         mut self,
         ais_endpoint: &str,
         service_spec: Option<ServiceSpec>,
+        runner_auth: Option<RunnerRegistrationAuth>,
     ) -> HyperResult<Node<Registered>> {
         let attachment = self
             .attachment
@@ -903,11 +977,14 @@ impl Node<Attached> {
             bootstrap_credential_inner(
                 &self.hyper,
                 &verified,
-                ais_endpoint,
-                realm_id,
-                service_spec,
-                acl,
-                realm_secret.as_deref(),
+                CredentialBootstrapRequest {
+                    ais_endpoint,
+                    realm_id,
+                    service_spec,
+                    acl,
+                    realm_secret: realm_secret.as_deref(),
+                    runner_auth,
+                },
             )
             .await?
         } else {
@@ -1023,11 +1100,14 @@ impl Hyper {
         bootstrap_credential_inner(
             &self.inner,
             verified,
-            ais_endpoint,
-            realm_id,
-            service_spec,
-            acl,
-            None,
+            CredentialBootstrapRequest {
+                ais_endpoint,
+                realm_id,
+                service_spec,
+                acl,
+                realm_secret: None,
+                runner_auth: None,
+            },
         )
         .await
     }
@@ -1184,15 +1264,29 @@ fn load_dynclib_workload_inner(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn bootstrap_credential_inner(
-    inner: &HyperInner,
-    verified: &VerifiedPackage,
-    ais_endpoint: &str,
+struct CredentialBootstrapRequest<'a> {
+    ais_endpoint: &'a str,
     realm_id: u32,
     service_spec: Option<ServiceSpec>,
     acl: Option<Acl>,
-    realm_secret: Option<&str>,
+    realm_secret: Option<&'a str>,
+    runner_auth: Option<RunnerRegistrationAuth>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn bootstrap_credential_inner(
+    inner: &HyperInner,
+    verified: &VerifiedPackage,
+    request: CredentialBootstrapRequest<'_>,
 ) -> HyperResult<register_response::RegisterOk> {
+    let CredentialBootstrapRequest {
+        ais_endpoint,
+        realm_id,
+        service_spec,
+        acl,
+        realm_secret,
+        runner_auth,
+    } = request;
     let manifest = &verified.manifest;
     info!(
         actr_type = manifest.actr_type_str(),
@@ -1245,6 +1339,9 @@ async fn bootstrap_credential_inner(
             psk_token: Some(psk_token.into()),
             target: Some(manifest.binary.target.clone()),
             auth_mode: Some(RegisterAuthMode::Package as i32),
+            runner_signature: None,
+            runner_signed_at: None,
+            runner_nonce: None,
         };
         ais.register_with_psk(req).await?
     } else {
@@ -1266,6 +1363,13 @@ async fn bootstrap_credential_inner(
             psk_token: None,
             target: Some(manifest.binary.target.clone()),
             auth_mode: Some(RegisterAuthMode::Package as i32),
+            runner_signature: runner_auth
+                .as_ref()
+                .map(|auth| bytes::Bytes::from(auth.signature.clone())),
+            runner_signed_at: runner_auth.as_ref().map(|auth| auth.signed_at),
+            runner_nonce: runner_auth
+                .as_ref()
+                .map(|auth| bytes::Bytes::from(auth.nonce.clone())),
         };
         ais.register_with_manifest(req).await?
     };

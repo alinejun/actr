@@ -447,6 +447,9 @@ mod tests {
             psk_token: None,
             target: None,
             auth_mode: Some(RegisterAuthMode::Package as i32),
+            runner_signature: None,
+            runner_signed_at: None,
+            runner_nonce: None,
         };
 
         // 编码
@@ -479,6 +482,9 @@ mod tests {
             psk_token: None,
             target: None,
             auth_mode: Some(RegisterAuthMode::Package as i32),
+            runner_signature: None,
+            runner_signed_at: None,
+            runner_nonce: None,
         };
 
         // 编码解码循环

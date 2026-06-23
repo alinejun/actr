@@ -49,6 +49,9 @@ pub async fn create_peer_with_websocket(
     id: ActrId,
     server_url: &str,
 ) -> anyhow::Result<(Arc<WebRtcCoordinator>, Arc<dyn SignalingClient>)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    super::install_default_crypto_provider_for_tests();
+
     let credential_state = create_credential_state_for_test(dummy_credential());
 
     let signaling_client = WebSocketSignalingClient::connect_to_with_identity(
@@ -98,6 +101,9 @@ pub async fn create_peer_with_vnet(
     server_url: &str,
     vnet: Arc<webrtc_util::vnet::net::Net>,
 ) -> anyhow::Result<(Arc<WebRtcCoordinator>, Arc<dyn SignalingClient>)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    super::install_default_crypto_provider_for_tests();
+
     let credential_state = create_credential_state_for_test(dummy_credential());
 
     let signaling_client = WebSocketSignalingClient::connect_to_with_identity(

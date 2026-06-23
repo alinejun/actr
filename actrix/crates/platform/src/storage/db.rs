@@ -249,6 +249,29 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
+        // AIS unpublished package runner nonce table. AIS inserts after
+        // runner_signature verification; the unique index is the replay guard.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS ais_runner_nonce (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                manufacturer TEXT    NOT NULL,
+                key_id       TEXT    NOT NULL,
+                nonce        BLOB    NOT NULL,
+                created_at   INTEGER NOT NULL,
+                expires_at   INTEGER NOT NULL,
+                UNIQUE(manufacturer, key_id, nonce)
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_ais_runner_nonce_expires
+             ON ais_runner_nonce(expires_at)",
+        )
+        .execute(&self.pool)
+        .await?;
+
         // Backfill key_id for existing MFRs that have a public_key but empty key_id.
         // This runs on every startup but is a no-op when all rows already have a key_id.
         {

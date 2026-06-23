@@ -141,6 +141,19 @@ impl RunCommand {
         info!("📡 Signaling server: {}", config.signaling_url.as_str());
         info!("🔐 Trust anchors: {} configured", config.trust.len());
 
+        let runner_auth = self
+            .build_runner_registration_auth(&config, &manifest, &package_bytes)
+            .map_err(|e| {
+                ActrCliError::command_error(format!(
+                    "Failed to prepare runner registration signature: {e}"
+                ))
+            })?;
+        if runner_auth.is_some() {
+            info!("🔏 Runner registration signature prepared from mfr.keychain");
+        } else {
+            info!("No mfr.keychain configured; continuing without runner registration signature");
+        }
+
         // 6. Initialize observability
         let _obs_guard = init_observability(&config.observability).map_err(|e| {
             ActrCliError::command_error(format!("Failed to initialize observability: {}", e))
@@ -158,17 +171,20 @@ impl RunCommand {
             .map_err(|e| ActrCliError::command_error(format!("Failed to attach package: {}", e)))?;
         info!("✅ Package attached");
 
-        let registered = attached.register(&ais_endpoint).await.map_err(|e| {
-            ActrCliError::command_error(format!(
-                "Failed to register with AIS at {}.\n\n\
+        let registered = attached
+            .register_with_runner_auth(&ais_endpoint, runner_auth)
+            .await
+            .map_err(|e| {
+                ActrCliError::command_error(format!(
+                    "Failed to register with AIS at {}.\n\n\
                  Possible causes:\n\
                  - AIS server is not running\n\
                  - Incorrect [ais_endpoint] url in the runtime config\n\
                  - Network connectivity issues\n\n\
                  Error: {}",
-                ais_endpoint, e
-            ))
-        })?;
+                    ais_endpoint, e
+                ))
+            })?;
         info!("✅ AIS registration successful");
 
         let actr_ref = registered
@@ -249,6 +265,36 @@ impl RunCommand {
             authors: vec![],
             license: manifest.metadata.license.clone(),
         }
+    }
+
+    fn build_runner_registration_auth(
+        &self,
+        config: &actr_config::RuntimeConfig,
+        manifest: &actr_pack::PackageManifest,
+        package_bytes: &[u8],
+    ) -> anyhow::Result<Option<actr_hyper::RunnerRegistrationAuth>> {
+        let cli_config = crate::config::resolver::resolve_effective_cli_config()?;
+        let Some(keychain) = cli_config.mfr.keychain.as_deref() else {
+            return Ok(None);
+        };
+
+        let key_path = crate::commands::package_build::resolve_key_path(None, Some(keychain))?;
+        let signing_key = crate::commands::package_build::load_signing_key(&key_path)?;
+        let manifest_raw = actr_pack::read_manifest_raw(package_bytes)?;
+        let actr_type = actr_protocol::ActrType {
+            manufacturer: manifest.manufacturer.clone(),
+            name: manifest.name.clone(),
+            version: manifest.version.clone(),
+        };
+
+        let auth = actr_hyper::RunnerRegistrationAuth::sign(
+            &signing_key,
+            config.realm.realm_id,
+            &actr_type,
+            &manifest.binary.target,
+            manifest_raw.as_bytes(),
+        )?;
+        Ok(Some(auth))
     }
 
     async fn init_hyper(

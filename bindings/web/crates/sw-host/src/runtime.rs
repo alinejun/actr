@@ -688,6 +688,9 @@ impl SwRuntime {
             psk_token: psk_token.clone().map(|t| t.into()),
             target: None,
             auth_mode: Some(auth_mode as i32),
+            runner_signature: None,
+            runner_signed_at: None,
+            runner_nonce: None,
         };
 
         log::info!(

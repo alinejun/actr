@@ -70,6 +70,9 @@ use crate::storage::{KeyRecord, KeyStorage};
 ///
 /// 后台任务每隔此时间检查一次密钥是否需要刷新
 const KEY_REFRESH_CHECK_INTERVAL_SECS: u64 = 600; // 10 分钟
+const RUNNER_SIGNED_AT_MAX_AGE_SECS: u64 = 5 * 60;
+const RUNNER_SIGNED_AT_FUTURE_SKEW_SECS: u64 = 60;
+const RUNNER_NONCE_TTL_SECS: u64 = 10 * 60;
 
 use actr_protocol::{
     AIdCredential, ActrId, ActrType, ErrorResponse, IdentityClaims, Realm, RegisterRequest,
@@ -678,6 +681,9 @@ impl AIdIssuer {
             || request.manifest_raw.is_some()
             || request.mfr_signature.is_some()
             || request.psk_token.is_some()
+            || request.runner_signature.is_some()
+            || request.runner_signed_at.is_some()
+            || request.runner_nonce.is_some()
         {
             return Err(AidError::InvalidFormat);
         }
@@ -737,145 +743,301 @@ impl AIdIssuer {
             return Ok(());
         }
 
-        // Path 2: not in table -> verify signature (own package, not yet published)
-        if let (Some(manifest_bytes), Some(mfr_signature)) =
-            (&request.manifest_raw, &request.mfr_signature)
-        {
-            // Parse manifest using standard TOML. Reject if not valid UTF-8/TOML —
-            // unparseable manifests must not bypass the identity binding check below.
-            let manifest_str = std::str::from_utf8(manifest_bytes.as_ref()).map_err(|_| {
-                platform::recording::warn!("MFR manifest_raw is not valid UTF-8");
-                AidError::InvalidFormat
-            })?;
-            let manifest_toml: toml::Value = manifest_str.parse().map_err(|e| {
-                platform::recording::warn!("MFR manifest_raw is not valid TOML: {}", e);
-                AidError::InvalidFormat
-            })?;
-
-            // Extract signing_key_id — mandatory for all modern packages.
-            // Without it, we cannot reliably resolve the correct MFR key after rotation.
-            let signing_key_id = manifest_toml
-                .get("signing_key_id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
+        // Path 2: not in table -> verify package signature + runner authorization
+        // (own package, not yet published).
+        let (manifest_bytes, mfr_signature, runner_signature, runner_signed_at, runner_nonce) =
+            match (
+                &request.manifest_raw,
+                &request.mfr_signature,
+                &request.runner_signature,
+                request.runner_signed_at,
+                &request.runner_nonce,
+            ) {
+                (
+                    Some(manifest_bytes),
+                    Some(mfr_signature),
+                    Some(runner_signature),
+                    Some(runner_signed_at),
+                    Some(runner_nonce),
+                ) => (
+                    manifest_bytes,
+                    mfr_signature,
+                    runner_signature,
+                    runner_signed_at,
+                    runner_nonce,
+                ),
+                _ => {
                     platform::recording::warn!(
-                        "MFR manifest_raw missing 'signing_key_id', manufacturer={}",
-                        mfr_name
-                    );
-                    AidError::InvalidFormat
-                })?
-                .to_string();
-
-            // Look up the manufacturer's public key by key_id (supports current + historical)
-            let manager = actrix_mfr::MfrManager::new(pool);
-            let mfr_info = manager
-                .resolve_key_by_id(mfr_name, &signing_key_id)
-                .await
-                .map_err(|e| {
-                    // Distinguish revoked keys from other lookup failures:
-                    // KeyRevoked → clear rejection, not an internal error
-                    if matches!(e, actrix_mfr::MfrError::KeyRevoked(_)) {
-                        platform::recording::warn!(
-                            "MFR signing key has been revoked: manufacturer={}, key_id={}",
-                            mfr_name,
-                            signing_key_id
-                        );
-                        return AidError::ManufacturerNotVerified;
-                    }
-                    platform::recording::warn!(
-                        "MFR public key lookup failed: manufacturer={}, key_id={}, err={}",
-                        mfr_name,
-                        signing_key_id,
-                        e
-                    );
-                    AidError::GenerationFailed(format!("MFR lookup failed: {e}"))
-                })?;
-
-            // Verify signature using the manufacturer's public key
-            let sig_b64 = base64::prelude::BASE64_STANDARD.encode(mfr_signature.as_ref());
-            let valid = actrix_mfr::crypto::verify_signature(
-                manifest_bytes.as_ref(),
-                &sig_b64,
-                &mfr_info.public_key,
-            )
-            .map_err(|e| {
-                platform::recording::warn!(
-                    "MFR signature verification error: manufacturer={}, err={}",
-                    mfr_name,
-                    e
-                );
-                AidError::GenerationFailed(format!("Signature verification error: {e}"))
-            })?;
-
-            if valid {
-                // SECURITY: Verify that manifest identity matches the RegisterRequest.
-                // Without this check, an attacker holding any valid signed manifest from
-                // the same MFR could reuse it to register a different actr_type/target.
-                let m_manufacturer = manifest_toml
-                    .get("manufacturer")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let m_name = manifest_toml
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let m_version = manifest_toml
-                    .get("version")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let m_target = manifest_toml
-                    .get("binary")
-                    .and_then(|b| b.get("target"))
-                    .and_then(|v| v.as_str());
-
-                // Check manufacturer/name/version match actr_type
-                if m_manufacturer != actr_type.manufacturer
-                    || m_name != actr_type.name
-                    || m_version != actr_type.version
-                {
-                    platform::recording::warn!(
-                        "MFR manifest identity mismatch: manifest={}:{}:{}, request={}",
-                        m_manufacturer,
-                        m_name,
-                        m_version,
+                        "MFR verification failed: unpublished package requires manifest_raw, mfr_signature, runner_signature, runner_signed_at, and runner_nonce; type_str={}",
                         type_str
                     );
                     return Err(AidError::ManufacturerNotVerified);
                 }
+            };
 
-                // Check target if provided in both request and manifest
-                if let (Some(req_target), Some(manifest_target)) =
-                    (request.target.as_deref(), m_target)
-                {
-                    if req_target != manifest_target {
-                        platform::recording::warn!(
-                            "MFR manifest target mismatch: manifest={}, request={}",
-                            manifest_target,
-                            req_target
-                        );
-                        return Err(AidError::ManufacturerNotVerified);
-                    }
-                }
+        if !matches!(runner_nonce.len(), 16 | 32) {
+            platform::recording::warn!(
+                "runner_nonce has invalid length: len={}, type_str={}",
+                runner_nonce.len(),
+                type_str
+            );
+            return Err(AidError::InvalidFormat);
+        }
 
-                platform::recording::debug!(
-                    "MFR signature verification passed, type_str={}",
-                    type_str
+        let now = Self::unix_now_secs()?;
+        Self::verify_runner_signed_at(runner_signed_at, now)?;
+
+        // Parse manifest using standard TOML. Reject if not valid UTF-8/TOML —
+        // unparseable manifests must not bypass the identity binding check below.
+        let manifest_str = std::str::from_utf8(manifest_bytes.as_ref()).map_err(|_| {
+            platform::recording::warn!("MFR manifest_raw is not valid UTF-8");
+            AidError::InvalidFormat
+        })?;
+        let manifest_toml: toml::Value = manifest_str.parse().map_err(|e| {
+            platform::recording::warn!("MFR manifest_raw is not valid TOML: {}", e);
+            AidError::InvalidFormat
+        })?;
+
+        // Extract signing_key_id — mandatory for all modern packages.
+        // Without it, we cannot reliably resolve the correct MFR key after rotation.
+        let signing_key_id = manifest_toml
+            .get("signing_key_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                platform::recording::warn!(
+                    "MFR manifest_raw missing 'signing_key_id', manufacturer={}",
+                    mfr_name
                 );
-                return Ok(());
-            }
+                AidError::InvalidFormat
+            })?
+            .to_string();
 
+        // Look up the manufacturer's public key by key_id (supports current + historical)
+        let manager = actrix_mfr::MfrManager::new(pool.clone());
+        let mfr_info = manager
+            .resolve_key_by_id(mfr_name, &signing_key_id)
+            .await
+            .map_err(|e| {
+                // Distinguish revoked keys from other lookup failures:
+                // KeyRevoked → clear rejection, not an internal error
+                if matches!(e, actrix_mfr::MfrError::KeyRevoked(_)) {
+                    platform::recording::warn!(
+                        "MFR signing key has been revoked: manufacturer={}, key_id={}",
+                        mfr_name,
+                        signing_key_id
+                    );
+                    return AidError::ManufacturerNotVerified;
+                }
+                platform::recording::warn!(
+                    "MFR public key lookup failed: manufacturer={}, key_id={}, err={}",
+                    mfr_name,
+                    signing_key_id,
+                    e
+                );
+                AidError::GenerationFailed(format!("MFR lookup failed: {e}"))
+            })?;
+
+        // Verify package manifest signature using the manufacturer's public key.
+        let sig_b64 = base64::prelude::BASE64_STANDARD.encode(mfr_signature.as_ref());
+        let valid = actrix_mfr::crypto::verify_signature(
+            manifest_bytes.as_ref(),
+            &sig_b64,
+            &mfr_info.public_key,
+        )
+        .map_err(|e| {
+            platform::recording::warn!(
+                "MFR signature verification error: manufacturer={}, err={}",
+                mfr_name,
+                e
+            );
+            AidError::GenerationFailed(format!("Signature verification error: {e}"))
+        })?;
+
+        if !valid {
             platform::recording::warn!(
                 "MFR signature verification failed: invalid signature, type_str={}",
                 type_str
             );
-        } else {
-            platform::recording::warn!(
-                "MFR verification failed: package not registered and no signature provided, type_str={}",
-                type_str
-            );
+            return Err(AidError::ManufacturerNotVerified);
         }
 
-        Err(AidError::ManufacturerNotVerified)
+        // SECURITY: Verify that manifest identity matches the RegisterRequest.
+        // Without this check, an attacker holding any valid signed manifest from
+        // the same MFR could reuse it to register a different actr_type/target.
+        let m_manufacturer = manifest_toml
+            .get("manufacturer")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let m_name = manifest_toml
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let m_version = manifest_toml
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let m_target = manifest_toml
+            .get("binary")
+            .and_then(|b| b.get("target"))
+            .and_then(|v| v.as_str());
+
+        // Check manufacturer/name/version match actr_type.
+        if m_manufacturer != actr_type.manufacturer
+            || m_name != actr_type.name
+            || m_version != actr_type.version
+        {
+            platform::recording::warn!(
+                "MFR manifest identity mismatch: manifest={}:{}:{}, request={}",
+                m_manufacturer,
+                m_name,
+                m_version,
+                type_str
+            );
+            return Err(AidError::ManufacturerNotVerified);
+        }
+
+        // Check target if provided in both request and manifest.
+        if let (Some(req_target), Some(manifest_target)) = (request.target.as_deref(), m_target) {
+            if req_target != manifest_target {
+                platform::recording::warn!(
+                    "MFR manifest target mismatch: manifest={}, request={}",
+                    manifest_target,
+                    req_target
+                );
+                return Err(AidError::ManufacturerNotVerified);
+            }
+        }
+
+        let manifest_target = m_target.or(request.target.as_deref()).ok_or_else(|| {
+            platform::recording::warn!("MFR manifest target missing, type_str={}", type_str);
+            AidError::InvalidFormat
+        })?;
+        let manifest_sha256_hex = {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(manifest_bytes.as_ref());
+            actr_protocol::lower_hex(&digest)
+        };
+        let runner_payload =
+            actr_protocol::build_runner_register_payload(actr_protocol::RunnerRegisterPayload {
+                realm_id: request.realm.realm_id,
+                actr_type,
+                target: manifest_target,
+                manifest_sha256_hex: &manifest_sha256_hex,
+                runner_signed_at,
+                runner_nonce: runner_nonce.as_ref(),
+            });
+        let runner_sig_b64 = base64::prelude::BASE64_STANDARD.encode(runner_signature.as_ref());
+        let runner_valid = actrix_mfr::crypto::verify_signature(
+            runner_payload.as_bytes(),
+            &runner_sig_b64,
+            &mfr_info.public_key,
+        )
+        .map_err(|e| {
+            platform::recording::warn!(
+                "runner_signature verification error: manufacturer={}, key_id={}, err={}",
+                mfr_name,
+                signing_key_id,
+                e
+            );
+            AidError::GenerationFailed(format!("Runner signature verification error: {e}"))
+        })?;
+
+        if !runner_valid {
+            platform::recording::warn!(
+                "runner_signature verification failed: manufacturer={}, key_id={}, type_str={}",
+                mfr_name,
+                signing_key_id,
+                type_str
+            );
+            return Err(AidError::ManufacturerNotVerified);
+        }
+
+        Self::consume_runner_nonce(&pool, mfr_name, &signing_key_id, runner_nonce.as_ref(), now)
+            .await?;
+
+        platform::recording::debug!(
+            "MFR manifest and runner signature verification passed, type_str={}",
+            type_str
+        );
+        Ok(())
+    }
+
+    fn unix_now_secs() -> Result<u64, AidError> {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .map_err(|e| AidError::InvalidTimestamp(format!("system clock before Unix epoch: {e}")))
+    }
+
+    fn verify_runner_signed_at(signed_at: u64, now: u64) -> Result<(), AidError> {
+        if signed_at > now.saturating_add(RUNNER_SIGNED_AT_FUTURE_SKEW_SECS) {
+            platform::recording::warn!(
+                "runner_signed_at is too far in the future: signed_at={}, now={}, future_skew_secs={}",
+                signed_at,
+                now,
+                RUNNER_SIGNED_AT_FUTURE_SKEW_SECS
+            );
+            return Err(AidError::InvalidTimestamp(
+                "runner_signed_at is too far in the future".to_string(),
+            ));
+        }
+
+        if now.saturating_sub(signed_at) > RUNNER_SIGNED_AT_MAX_AGE_SECS {
+            platform::recording::warn!(
+                "runner_signed_at outside max age: signed_at={}, now={}, max_age_secs={}",
+                signed_at,
+                now,
+                RUNNER_SIGNED_AT_MAX_AGE_SECS
+            );
+            return Err(AidError::Expired);
+        }
+
+        Ok(())
+    }
+
+    async fn consume_runner_nonce(
+        pool: &sqlx::SqlitePool,
+        manufacturer: &str,
+        signing_key_id: &str,
+        runner_nonce: &[u8],
+        now: u64,
+    ) -> Result<(), AidError> {
+        let now_i64 = i64::try_from(now)
+            .map_err(|_| AidError::InvalidTimestamp("current time exceeds i64".to_string()))?;
+        let expires_at = now_i64.saturating_add(RUNNER_NONCE_TTL_SECS as i64);
+
+        sqlx::query("DELETE FROM ais_runner_nonce WHERE expires_at < ?")
+            .bind(now_i64)
+            .execute(pool)
+            .await
+            .map_err(|e| AidError::GenerationFailed(format!("runner nonce cleanup failed: {e}")))?;
+
+        let result = sqlx::query(
+            "INSERT INTO ais_runner_nonce (manufacturer, key_id, nonce, created_at, expires_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(manufacturer)
+        .bind(signing_key_id)
+        .bind(runner_nonce)
+        .bind(now_i64)
+        .bind(expires_at)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(sqlx::Error::Database(err)) if err.message().contains("UNIQUE") => {
+                platform::recording::warn!(
+                    "runner_nonce replay detected: manufacturer={}, key_id={}",
+                    manufacturer,
+                    signing_key_id
+                );
+                Err(AidError::ManufacturerNotVerified)
+            }
+            Err(err) => Err(AidError::GenerationFailed(format!(
+                "runner nonce consume failed: {err}"
+            ))),
+        }
     }
 
     /// 生成 ActrId

@@ -407,6 +407,9 @@ impl NetworkServiceDiscovery {
             psk_token: None,
             target: None,
             auth_mode: Some(RegisterAuthMode::Linked as i32),
+            runner_signature: None,
+            runner_signed_at: None,
+            runner_nonce: None,
         }
     }
 }

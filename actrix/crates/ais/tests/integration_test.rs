@@ -191,6 +191,9 @@ fn linked_register_request() -> RegisterRequest {
         psk_token: None,
         target: None,
         auth_mode: Some(RegisterAuthMode::Linked as i32),
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
     }
 }
 
@@ -351,6 +354,9 @@ async fn test_register_route_package_with_mfr_identity_succeeds() {
         psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
     };
     let response = post_register(app, request, None).await;
 
@@ -390,6 +396,9 @@ async fn test_register_route_unspecified_auth_mode_uses_package_identity() {
         psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: None,
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
     };
     let response = post_register(app, request, None).await;
 
@@ -428,6 +437,9 @@ async fn test_register_route_package_without_mfr_identity_is_still_rejected() {
         psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
     };
     let response = post_register(app, request, None).await;
 
@@ -544,6 +556,9 @@ async fn test_package_registration_without_mfr_identity_is_still_rejected() {
         psk_token: None,
         target: None,
         auth_mode: Some(RegisterAuthMode::Package as i32),
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
     };
 
     let response = issuer
@@ -635,6 +650,9 @@ async fn test_end_to_end_credential_flow() {
         psk_token: None,
         target: None,
         auth_mode: Some(RegisterAuthMode::Package as i32),
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
     };
 
     let response = issuer
@@ -702,6 +720,9 @@ async fn test_end_to_end_credential_flow() {
             psk_token: None,
             target: None,
             auth_mode: Some(RegisterAuthMode::Package as i32),
+            runner_signature: None,
+            runner_signed_at: None,
+            runner_nonce: None,
         };
 
         let rsp = issuer
@@ -823,6 +844,9 @@ async fn test_issuer_creation_fails_with_wrong_shared_key() {
         psk_token: None,
         target: None,
         auth_mode: Some(RegisterAuthMode::Package as i32),
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
     };
     let resp = issuer
         .issue_credential(&request)
@@ -947,6 +971,59 @@ hash = "0000000000000000000000000000000000000000000000000000000000000000"
     (manifest_bytes, signature.to_bytes().to_vec())
 }
 
+fn test_unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+fn sign_runner_request_at(
+    request: &mut RegisterRequest,
+    signing_key: &ed25519_dalek::SigningKey,
+    manifest_bytes: &[u8],
+    signed_at: u64,
+    nonce: Vec<u8>,
+) {
+    use ed25519_dalek::Signer;
+    use sha2::{Digest, Sha256};
+
+    let target = request
+        .target
+        .as_deref()
+        .expect("test request should carry target");
+    let digest = Sha256::digest(manifest_bytes);
+    let manifest_sha256_hex = actr_protocol::lower_hex(&digest);
+    let payload =
+        actr_protocol::build_runner_register_payload(actr_protocol::RunnerRegisterPayload {
+            realm_id: request.realm.realm_id,
+            actr_type: &request.actr_type,
+            target,
+            manifest_sha256_hex: &manifest_sha256_hex,
+            runner_signed_at: signed_at,
+            runner_nonce: &nonce,
+        });
+    let signature = signing_key.sign(payload.as_bytes());
+
+    request.runner_signature = Some(prost::bytes::Bytes::from(signature.to_bytes().to_vec()));
+    request.runner_signed_at = Some(signed_at);
+    request.runner_nonce = Some(prost::bytes::Bytes::from(nonce));
+}
+
+fn sign_runner_request(
+    request: &mut RegisterRequest,
+    signing_key: &ed25519_dalek::SigningKey,
+    manifest_bytes: &[u8],
+) {
+    sign_runner_request_at(
+        request,
+        signing_key,
+        manifest_bytes,
+        test_unix_now_secs(),
+        vec![0x42; 32],
+    );
+}
+
 /// Helper: seed an MFR with a specific keypair and return (mfr_id, key_id, public_key_b64).
 async fn seed_mfr_with_key(
     pool: &sqlx::SqlitePool,
@@ -1012,6 +1089,146 @@ async fn archive_key_to_history(
     .expect("archive key to history");
 }
 
+/// Path 2: missing runner_signature is rejected for unpublished packages.
+#[tokio::test]
+#[serial]
+async fn test_path2_missing_runner_signature_rejected() {
+    use ed25519_dalek::SigningKey;
+    use rand::rngs::OsRng;
+
+    let env = setup_test_environment().await;
+    let signer_client = create_signer_client(&env.signer_config, &env.shared_key)
+        .await
+        .expect("signer client");
+    let issuer = AIdIssuer::new(
+        signer_client,
+        default_issuer_config(&env.issuer_temp_dir),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .expect("issuer");
+
+    let pool = platform::storage::db::get_database().get_pool();
+    seed_realm(1001, "test", None).await;
+
+    let key = SigningKey::generate(&mut OsRng);
+    let (_mfr_id, _key_id) = seed_mfr_with_key(pool, "missrunner", &key).await;
+    let (manifest_bytes, sig_bytes) = build_signed_manifest(
+        &key,
+        "missrunner",
+        "MissingRunnerService",
+        "1.0.0",
+        "wasm32-wasip1",
+    );
+
+    let request = RegisterRequest {
+        actr_type: ActrType {
+            manufacturer: "missrunner".to_string(),
+            name: "MissingRunnerService".to_string(),
+            version: "1.0.0".to_string(),
+        },
+        realm: Realm { realm_id: 1001 },
+        service_spec: None,
+        acl: None,
+        service: None,
+        ws_address: None,
+        manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes)),
+        mfr_signature: Some(prost::bytes::Bytes::from(sig_bytes)),
+        psk_token: None,
+        target: Some("wasm32-wasip1".to_string()),
+        auth_mode: Some(RegisterAuthMode::Package as i32),
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
+    };
+
+    let response = issuer.issue_credential(&request).await.expect("issue");
+    match response.result.expect("result") {
+        register_response::Result::Error(_) => {}
+        register_response::Result::Success(_) => {
+            panic!("Path 2 without runner_signature should be rejected")
+        }
+    }
+}
+
+/// Path 2: replaying the same runner_nonce is rejected after the first success.
+#[tokio::test]
+#[serial]
+async fn test_path2_runner_nonce_replay_rejected() {
+    use ed25519_dalek::SigningKey;
+    use rand::rngs::OsRng;
+
+    let env = setup_test_environment().await;
+    let signer_client = create_signer_client(&env.signer_config, &env.shared_key)
+        .await
+        .expect("signer client");
+    let issuer = AIdIssuer::new(
+        signer_client,
+        default_issuer_config(&env.issuer_temp_dir),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .expect("issuer");
+
+    let pool = platform::storage::db::get_database().get_pool();
+    seed_realm(1001, "test", None).await;
+
+    let key = SigningKey::generate(&mut OsRng);
+    let (_mfr_id, _key_id) = seed_mfr_with_key(pool, "replaymfr", &key).await;
+    let (manifest_bytes, sig_bytes) =
+        build_signed_manifest(&key, "replaymfr", "ReplayService", "1.0.0", "wasm32-wasip1");
+
+    let mut request = RegisterRequest {
+        actr_type: ActrType {
+            manufacturer: "replaymfr".to_string(),
+            name: "ReplayService".to_string(),
+            version: "1.0.0".to_string(),
+        },
+        realm: Realm { realm_id: 1001 },
+        service_spec: None,
+        acl: None,
+        service: None,
+        ws_address: None,
+        manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes.clone())),
+        mfr_signature: Some(prost::bytes::Bytes::from(sig_bytes)),
+        psk_token: None,
+        target: Some("wasm32-wasip1".to_string()),
+        auth_mode: Some(RegisterAuthMode::Package as i32),
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
+    };
+    sign_runner_request_at(
+        &mut request,
+        &key,
+        &manifest_bytes,
+        test_unix_now_secs(),
+        vec![0x99; 32],
+    );
+
+    let first = issuer
+        .issue_credential(&request)
+        .await
+        .expect("first issue");
+    match first.result.expect("first result") {
+        register_response::Result::Success(_) => {}
+        register_response::Result::Error(err) => {
+            panic!("first Path 2 registration should succeed, got error: {err:?}")
+        }
+    }
+
+    let second = issuer
+        .issue_credential(&request)
+        .await
+        .expect("second issue");
+    match second.result.expect("second result") {
+        register_response::Result::Error(_) => {}
+        register_response::Result::Success(_) => {
+            panic!("replayed runner_nonce should be rejected")
+        }
+    }
+}
+
 /// Path 2: historical (retired) key passes signature verification.
 #[tokio::test]
 #[serial]
@@ -1061,7 +1278,7 @@ async fn test_path2_historical_retired_key_passes() {
     let (manifest_bytes, sig_bytes) =
         build_signed_manifest(&key_a, "histmfr", "HistService", "1.0.0", "wasm32-wasip1");
 
-    let request = RegisterRequest {
+    let mut request = RegisterRequest {
         actr_type: ActrType {
             manufacturer: "histmfr".to_string(),
             name: "HistService".to_string(),
@@ -1072,12 +1289,16 @@ async fn test_path2_historical_retired_key_passes() {
         acl: None,
         service: None,
         ws_address: None,
-        manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes)),
+        manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes.clone())),
         mfr_signature: Some(prost::bytes::Bytes::from(sig_bytes)),
         psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
     };
+    sign_runner_request(&mut request, &key_a, &manifest_bytes);
 
     let response = issuer.issue_credential(&request).await.expect("issue");
     match response.result.expect("result") {
@@ -1143,7 +1364,7 @@ async fn test_path2_revoked_key_rejected() {
         "wasm32-wasip1",
     );
 
-    let request = RegisterRequest {
+    let mut request = RegisterRequest {
         actr_type: ActrType {
             manufacturer: "revmfr".to_string(),
             name: "RevService".to_string(),
@@ -1154,12 +1375,16 @@ async fn test_path2_revoked_key_rejected() {
         acl: None,
         service: None,
         ws_address: None,
-        manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes)),
+        manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes.clone())),
         mfr_signature: Some(prost::bytes::Bytes::from(sig_bytes)),
         psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
     };
+    sign_runner_request(&mut request, &key_revoked, &manifest_bytes);
 
     let response = issuer.issue_credential(&request).await.expect("issue");
     match response.result.expect("result") {
@@ -1210,7 +1435,7 @@ async fn test_path2_identity_mismatch_rejected() {
         build_signed_manifest(&key, "spoofmfr", "ServiceA", "1.0.0", "wasm32-wasip1");
 
     // But register as ServiceB — identity mismatch!
-    let request = RegisterRequest {
+    let mut request = RegisterRequest {
         actr_type: ActrType {
             manufacturer: "spoofmfr".to_string(),
             name: "ServiceB".to_string(), // ← does not match manifest
@@ -1221,12 +1446,16 @@ async fn test_path2_identity_mismatch_rejected() {
         acl: None,
         service: None,
         ws_address: None,
-        manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes)),
+        manifest_raw: Some(prost::bytes::Bytes::from(manifest_bytes.clone())),
         mfr_signature: Some(prost::bytes::Bytes::from(sig_bytes)),
         psk_token: None,
         target: Some("wasm32-wasip1".to_string()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
     };
+    sign_runner_request(&mut request, &key, &manifest_bytes);
 
     let response = issuer.issue_credential(&request).await.expect("issue");
     match response.result.expect("result") {

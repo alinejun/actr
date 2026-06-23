@@ -188,6 +188,15 @@ message RegisterRequest {
   // Explicit authentication source. Omitted/UNSPECIFIED is treated as PACKAGE
   // for backward compatibility with older package clients.
   optional RegisterAuthMode auth_mode = 14;
+  // Ed25519 signature over the ACTR-RUNNER-REGISTER-V1 payload.
+  // Required only for unpublished Package Path 2 registrations.
+  optional bytes runner_signature = 15;
+  // Unix seconds included in the runner signature payload.
+  // AIS accepts only a short time window to prevent long-lived replay.
+  optional uint64 runner_signed_at = 16;
+  // Random nonce included in the runner signature payload.
+  // AIS atomically consumes it to prevent replay inside the time window.
+  optional bytes runner_nonce = 17;
 }
 
 message RegisterResponse {

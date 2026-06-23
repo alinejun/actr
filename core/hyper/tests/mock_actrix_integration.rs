@@ -26,6 +26,9 @@ fn test_register_request() -> RegisterRequest {
         psk_token: None,
         target: Some("wasm32-wasip2".into()),
         auth_mode: Some(RegisterAuthMode::Package as i32),
+        runner_signature: None,
+        runner_signed_at: None,
+        runner_nonce: None,
     }
 }
 
