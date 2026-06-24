@@ -762,4 +762,113 @@ mod tests {
         assert!(d3 >= Duration::from_secs(1));
         assert!(d4 <= Duration::from_secs(75)); // 60 + 25% jitter
     }
+
+    /// Hard rebind of a Package registration must re-invoke the runner auth
+    /// provider to mint a fresh proof. The initial runner nonce was consumed
+    /// by AIS on the first successful registration; replaying it would be
+    /// rejected. This locks in the re-sign behaviour added to fix replay on
+    /// hard rebind.
+    #[tokio::test]
+    async fn package_hard_rebind_re_signs_runner_proof() {
+        use actr_protocol::RegisterAuthMode;
+        use std::sync::atomic::AtomicU64;
+
+        struct CountingRunnerProvider {
+            calls: Arc<AtomicU64>,
+        }
+        impl crate::RunnerAuthProvider for CountingRunnerProvider {
+            fn sign(
+                &self,
+                _realm_id: u32,
+                _actr_type: &actr_protocol::ActrType,
+                _target: &str,
+                _manifest_raw: &[u8],
+            ) -> std::result::Result<crate::RunnerRegistrationAuth, crate::HyperError> {
+                let n = self.calls.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                // Deterministic fresh proof keyed by call count. The mock AIS
+                // server does not validate crypto, so the values only need to
+                // differ from the stale proof saved on the original request.
+                Ok(crate::RunnerRegistrationAuth {
+                    signature: vec![n as u8; 64],
+                    signed_at: 9_999_999_999,
+                    nonce: vec![n as u8; 32],
+                })
+            }
+        }
+
+        let calls = Arc::new(AtomicU64::new(0));
+        let provider: Arc<CountingRunnerProvider> = Arc::new(CountingRunnerProvider {
+            calls: calls.clone(),
+        });
+
+        let mut server = mockito::Server::new_async().await;
+        let response = RegisterResponse {
+            result: Some(register_response::Result::Success(register_ok(2, 9))),
+        };
+        let mock = server
+            .mock("POST", "/register")
+            .with_status(200)
+            .with_header("content-type", "application/x-protobuf")
+            .with_body(response.encode_to_vec())
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Stale runner proof (nonce 0xAA) saved on the original request — this
+        // is exactly what must not be replayed to AIS.
+        let request = RegisterRequest {
+            actr_type: actor(1).r#type,
+            realm: Realm { realm_id: 7 },
+            manifest_raw: Some(Bytes::from_static(b"manifest-bytes")),
+            mfr_signature: Some(Bytes::from_static(b"mfr-sig")),
+            target: Some("wasm32-wasip1".to_string()),
+            auth_mode: Some(RegisterAuthMode::Package as i32),
+            runner_signature: Some(Bytes::from_static(b"stale-runner-sig")),
+            runner_signed_at: Some(1),
+            runner_nonce: Some(Bytes::from_static(&[0xAA; 32])),
+            ..Default::default()
+        };
+
+        // Expired renewal token -> run_renewal_once takes the hard rebind branch.
+        let session = SessionState::new(SessionSnapshot {
+            actor_id: actor(1),
+            credential: credential(1),
+            credential_expires_at: prost_types::Timestamp {
+                seconds: 10,
+                nanos: 0,
+            },
+            turn_credential: TurnCredential {
+                username: "10:actor-1".to_string(),
+                password: "old".to_string(),
+                expires_at: 10,
+            },
+            renewal_token: Bytes::from_static(b"expired-renewal-token-32bytes"),
+            renewal_token_expires_at: prost_types::Timestamp {
+                seconds: 1,
+                nanos: 0,
+            },
+            generation: 1,
+        });
+
+        run_renewal_once(
+            session,
+            server.url(),
+            None,
+            RegistrationContext::Package {
+                request,
+                resign: Some(provider),
+            },
+            None,
+            None,
+        )
+        .await
+        .expect("hard rebind should commit new snapshot");
+
+        mock.assert_async().await;
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            1,
+            "hard rebind must re-invoke the runner auth provider exactly once"
+        );
+    }
 }
