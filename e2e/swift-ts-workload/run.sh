@@ -15,8 +15,10 @@ ADMIN_PASSWORD="e2e-test-password"
 MANUFACTURER="${MANUFACTURER:-actrium}"
 ACTRIX_BIN="${ACTRIX_BIN:-}"
 ACTR_CLI_MANIFEST="$REPO_ROOT/cli/Cargo.toml"
+ACTRIX_CONFIG_TEMPLATE="$SCRIPT_DIR/../package-runtime-echo/config/actrix.toml"
 E2E_TARGET_ROOT="$REPO_ROOT/target/e2e-cache/swift-ts-workload"
 ACTR_TARGET_DIR="$E2E_TARGET_ROOT/actr-cli"
+REALM_NAME_PREFIX="swift-ts-workload"
 
 for cmd in cargo curl jq sqlite3 python3 perl rustc lsof; do
     require_cmd "$cmd"
@@ -260,84 +262,6 @@ build_local_actr_cli() {
     ACTR_CLI_BIN="$ACTR_TARGET_DIR/debug/actr"
     [ -x "$ACTR_CLI_BIN" ] || fail "actr CLI binary missing at $ACTR_CLI_BIN"
     success "actr CLI ready: $ACTR_CLI_BIN"
-}
-
-render_runtime_configs() {
-    render_template \
-        "$SCRIPT_DIR/../package-runtime-echo/config/actrix.toml" \
-        "$ACTRIX_CONFIG_PATH" \
-        "__SQLITE_DIR__=$SQLITE_DIR" \
-        "__HTTP_PORT__=$HTTP_PORT" \
-        "__ICE_PORT__=$ICE_PORT"
-}
-
-start_actrix() {
-    section "🚀 Starting local actrix"
-    kill_listener tcp "$HTTP_PORT"
-    kill_listener udp "$ICE_PORT"
-
-    "$ACTRIX_BIN" --config "$ACTRIX_CONFIG_PATH" >"$LOG_DIR/actrix.log" 2>&1 &
-    ACTRIX_PID=$!
-
-    if ! wait_for_http_ok "http://127.0.0.1:${HTTP_PORT}/signaling/health" 120; then
-        cat "$LOG_DIR/actrix.log" >&2 || true
-        fail "actrix did not become healthy on port $HTTP_PORT"
-    fi
-    success "actrix is healthy on http://127.0.0.1:${HTTP_PORT}"
-}
-
-login_admin() {
-    section "🔐 Logging into Admin API"
-    local response_file="$RUN_DIR/admin-login.json"
-    curl -fsS \
-        -X POST \
-        "http://127.0.0.1:${HTTP_PORT}/admin/api/auth/login" \
-        -H 'Content-Type: application/json' \
-        -d "{\"password\":\"${ADMIN_PASSWORD}\"}" \
-        >"$response_file"
-    ADMIN_TOKEN="$(json_field "$response_file" '.token')"
-    success "Admin API login succeeded"
-}
-
-warmup_ais_key() {
-    section "🔑 Warming up AIS signing key"
-    local current_key_file="$RUN_DIR/ais-current-key.json"
-    local rotate_file="$RUN_DIR/ais-rotate-key.json"
-    local attempt=0
-
-    while [ $attempt -lt 60 ]; do
-        if curl -fsS "http://127.0.0.1:${HTTP_PORT}/ais/current-key" >"$current_key_file" 2>/dev/null \
-            && [ "$(jq -r '.status // "missing"' "$current_key_file" 2>/dev/null)" = "success" ]; then
-            success "AIS signing key is ready"
-            return 0
-        fi
-
-        curl -fsS -X POST "http://127.0.0.1:${HTTP_PORT}/ais/rotate-key" >"$rotate_file" 2>/dev/null || true
-        sleep 1
-        attempt=$((attempt + 1))
-    done
-
-    fail "AIS signing key warmup timed out"
-}
-
-ensure_realm() {
-    section "🪪 Creating realm via Admin API"
-    local create_file="$RUN_DIR/realm-create.json"
-    local realm_name="swift-ts-workload-${RUN_ID}"
-    curl -fsS \
-        -X POST \
-        "http://127.0.0.1:${HTTP_PORT}/admin/api/realms" \
-        -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-        -H 'Content-Type: application/json' \
-        -d "{\"name\":\"${realm_name}\",\"enabled\":true,\"expires_at\":0}" \
-        >"$create_file"
-
-    REALM_ID="$(json_field "$create_file" '.realm.realm_id')"
-    REALM_SECRET="$(json_field "$create_file" '.realm_secret')"
-
-    [ -n "$REALM_ID" ] || fail "Realm creation returned an empty realm id"
-    [ -n "$REALM_SECRET" ] || fail "Realm creation returned an empty realm secret"
-    success "Realm ${REALM_ID} created"
 }
 
 write_project_keychain_config() {
@@ -828,6 +752,9 @@ EOF
     local server_hyper_dir="$RUN_DIR/hyper/service"
     mkdir -p "$server_hyper_dir"
 
+    # The TS component is large enough that optimized Wasmtime compilation can
+    # exceed the macOS E2E registration window on cold runners.
+    ACTR_WASM_FAST_COMPILE="${ACTR_WASM_FAST_COMPILE:-1}" \
     RUST_LOG="${RUST_LOG:-info}" \
         run_actr run -c "$SERVER_RUNTIME_PATH" --hyper-dir "$server_hyper_dir" >"$LOG_DIR/server.log" 2>&1 &
     SERVER_PID=$!
@@ -866,10 +793,10 @@ check_service_ready() {
     success "Signaling health OK"
 
     local db_path="$SQLITE_DIR/signaling_cache.db"
-    # The TS workload is a JS-on-wasm component; its first wasmtime compile +
-    # instantiate during `actr run` attach can exceed four minutes on cold
-    # GitHub macOS runners, so keep a wider default registration window.
-    local timeout="${SERVICE_READY_TIMEOUT_SECONDS:-600}"
+    # The TS workload is a large JS-on-wasm component. On cold macOS runners,
+    # Wasmtime component compilation happens before AIS/signaling registration
+    # and can take several minutes even with fast compile enabled.
+    local timeout="${SERVICE_READY_TIMEOUT_SECONDS:-900}"
     if ! wait_for_service_registration \
         "$db_path" \
         "$REALM_ID" \

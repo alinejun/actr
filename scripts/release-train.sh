@@ -9,6 +9,7 @@ readonly LEGACY_FINAL_TAG_PREFIX="release-train-v"
 readonly PYTHON_PACKAGE_NAME="framework_codegen_python"
 readonly CRATES_IO_API="https://crates.io/api/v1/crates"
 readonly PYPI_API="https://pypi.org/pypi"
+readonly TEST_PYPI_API="https://test.pypi.org/pypi"
 
 readonly FOUNDATION_CRATES=(
   "actr-protocol"
@@ -834,6 +835,62 @@ for wp in web_packages:
         if dep_name.startswith("@actrium/actr-"):
             pkg["optionalDependencies"][dep_name] = version
     wp.write_text(json.dumps(pkg, indent=2) + "\n")
+
+typescript_plugin_package = repo / "tools/protoc-gen/typescript/package.json"
+typescript_plugin_package_data = json.loads(typescript_plugin_package.read_text())
+typescript_plugin_package_data["version"] = version
+typescript_plugin_package.write_text(
+    json.dumps(typescript_plugin_package_data, indent=2) + "\n"
+)
+
+typescript_plugin_lock = repo / "tools/protoc-gen/typescript/package-lock.json"
+typescript_plugin_lock_data = json.loads(typescript_plugin_lock.read_text())
+typescript_plugin_lock_data["version"] = version
+typescript_plugin_lock_data["packages"][""]["version"] = version
+typescript_plugin_lock.write_text(
+    json.dumps(typescript_plugin_lock_data, indent=2) + "\n"
+)
+
+embedded_versions = [
+    (
+        repo / "tools/protoc-gen/swift/Sources/framework-codegen-swift/main.swift",
+        r'(static let version = ")[^"]+(")',
+        rf'\g<1>{version}\g<2>',
+        1,
+    ),
+    (
+        repo / "tools/protoc-gen/typescript/src/main.ts",
+        r'(const VERSION = ")[^"]+(";)',
+        rf'\g<1>{version}\g<2>',
+        1,
+    ),
+    (
+        repo / "tools/protoc-gen/kotlin/build.gradle.kts",
+        r'(?m)^(version = ")[^"]+(")$',
+        rf'\g<1>{version}\g<2>',
+        1,
+    ),
+    (
+        repo / "tools/protoc-gen/kotlin/src/main/kotlin/io/actrium/codegen/Main.kt",
+        r'(protoc-gen-actrframework-kotlin )[0-9]+\.[0-9]+\.[0-9]+',
+        rf'\g<1>{version}',
+        1,
+    ),
+    (
+        repo / "tools/protoc-gen/kotlin/src/main/kotlin/io/actrium/codegen/Main.kt",
+        r'(println\("    )[0-9]+\.[0-9]+\.[0-9]+("\))',
+        rf'\g<1>{version}\g<2>',
+        1,
+    ),
+]
+
+for path, pattern, replacement, expected_count in embedded_versions:
+    updated, count = re.subn(pattern, replacement, path.read_text())
+    if count != expected_count:
+        raise RuntimeError(
+            f"expected {expected_count} version replacement(s) in {path}, got {count}"
+        )
+    path.write_text(updated)
 PY
 }
 
@@ -1380,6 +1437,12 @@ stage_release_version_files() {
     testing/mock-actrix/Cargo.toml \
     tools/protoc-gen/rust/Cargo.toml \
     tools/protoc-gen/web/Cargo.toml \
+    tools/protoc-gen/swift/Sources/framework-codegen-swift/main.swift \
+    tools/protoc-gen/typescript/src/main.ts \
+    tools/protoc-gen/typescript/package.json \
+    tools/protoc-gen/typescript/package-lock.json \
+    tools/protoc-gen/kotlin/build.gradle.kts \
+    tools/protoc-gen/kotlin/src/main/kotlin/io/actrium/codegen/Main.kt \
     cli/Cargo.toml \
     tools/protoc-gen/python/pyproject.toml \
     bindings/web/packages/actr-dom/package.json \
@@ -1454,7 +1517,11 @@ crate_registry_url() {
 }
 
 python_registry_url() {
-  printf 'https://pypi.org/project/%s/%s/' "$PYTHON_PACKAGE_NAME" "$VERSION"
+  if [[ "$PRE_RELEASE" == true ]]; then
+    printf 'https://test.pypi.org/project/%s/%s/' "$PYTHON_PACKAGE_NAME" "$VERSION"
+  else
+    printf 'https://pypi.org/project/%s/%s/' "$PYTHON_PACKAGE_NAME" "$VERSION"
+  fi
 }
 
 npm_registry_url() {
@@ -1470,7 +1537,12 @@ crate_version_visible() {
 }
 
 python_version_visible() {
-  curl -A "$(registry_user_agent)" -fsSLo /dev/null "${PYPI_API}/${PYTHON_PACKAGE_NAME}/${VERSION}/json"
+  local api_url="$PYPI_API"
+  if [[ "$PRE_RELEASE" == true ]]; then
+    api_url="$TEST_PYPI_API"
+  fi
+
+  curl -A "$(registry_user_agent)" -fsSLo /dev/null "${api_url}/${PYTHON_PACKAGE_NAME}/${VERSION}/json"
 }
 
 wait_for_visibility() {
@@ -1570,8 +1642,17 @@ publish_python_package() {
     return
   fi
 
-  if [[ -z "${PYPI_API_TOKEN:-}" ]]; then
-    log_warn "Skipping ${PYTHON_PACKAGE_NAME}; PYPI_API_TOKEN not set"
+  local twine_password="${PYPI_API_TOKEN:-}"
+  if [[ "$PRE_RELEASE" == true ]]; then
+    twine_password="${TEST_PYPI_API_TOKEN:-}"
+  fi
+
+  if [[ -z "$twine_password" ]]; then
+    local token_name="PYPI_API_TOKEN"
+    if [[ "$PRE_RELEASE" == true ]]; then
+      token_name="TEST_PYPI_API_TOKEN"
+    fi
+    log_warn "Skipping ${PYTHON_PACKAGE_NAME}; ${token_name} not set"
     append_state "$PYTHON_PACKAGE_NAME" "protoc-gen" "python" "skipped" "pypi_token_missing" "$registry_url" "$RELEASE_SHA"
     return
   fi
@@ -1583,9 +1664,15 @@ publish_python_package() {
   upload_log=$(mktemp)
   (
     cd tools/protoc-gen/python
-    TWINE_USERNAME="__token__" \
-    TWINE_PASSWORD="${PYPI_API_TOKEN:-}" \
-    "$RELEASE_PYTHON_BIN" -m twine upload dist/*
+    if [[ "$PRE_RELEASE" == true ]]; then
+      TWINE_USERNAME="__token__" \
+      TWINE_PASSWORD="$twine_password" \
+      "$RELEASE_PYTHON_BIN" -m twine upload --repository-url https://test.pypi.org/legacy/ dist/*
+    else
+      TWINE_USERNAME="__token__" \
+      TWINE_PASSWORD="$twine_password" \
+      "$RELEASE_PYTHON_BIN" -m twine upload dist/*
+    fi
   ) 2>&1 | tee "$upload_log"
   local twine_status=${PIPESTATUS[0]}
 

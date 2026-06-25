@@ -1,8 +1,8 @@
 use actr_protocol::acl_rule::{Permission, SourceRealm};
 use actr_protocol::{
-    Acl, AclRule, ActrRelay, ActrType, Realm, RegisterRequest, RegisterResponse, RoleNegotiation,
-    acl_rule, actr_relay, peer_to_signaling, register_response, route_candidates_response,
-    signaling_envelope, signaling_to_actr,
+    Acl, AclRule, ActrRelay, ActrType, Realm, RegisterAuthMode, RegisterRequest, RegisterResponse,
+    RoleNegotiation, acl_rule, actr_relay, peer_to_signaling, register_response,
+    route_candidates_response, signaling_envelope, signaling_to_actr,
 };
 use base64::Engine as _;
 use futures::{SinkExt, StreamExt};
@@ -32,7 +32,9 @@ type WsRead = futures::stream::SplitStream<WsStream>;
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const ACTRIX_SHARED_KEY: &str = "0123456789abcdef0123456789abcdef";
+const TEST_REALM_SECRET: &str = "actrix-fullstack-realm-secret";
 const DEFAULT_TOKEN_TTL: u64 = 3600;
+const RENEWAL_TOKEN_SECRET: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 /// Convenience bundle for a running actrix instance
 struct ActrixHarness {
@@ -137,6 +139,7 @@ path = "ks.db"
 [services.ais]
 [services.ais.server]
 token_ttl_secs = {token_ttl}
+renewal_token_secret = "{renewal_secret}"
 
 [services.signaling]
 [services.signaling.server]
@@ -154,6 +157,7 @@ pid = "{pid}"
         shared = ACTRIX_SHARED_KEY,
         port = port,
         token_ttl = token_ttl_secs,
+        renewal_secret = RENEWAL_TOKEN_SECRET,
         pid = dir.join("actrix.pid").display()
     )
     .expect("write config");
@@ -209,6 +213,7 @@ path = "ks.db"
 [services.ais]
 [services.ais.server]
 token_ttl_secs = {token_ttl}
+renewal_token_secret = "{renewal_secret}"
 
 [services.signaling]
 [services.signaling.server]
@@ -237,6 +242,7 @@ pid = "{pid}"
         shared = ACTRIX_SHARED_KEY,
         port = port,
         token_ttl = token_ttl_secs,
+        renewal_secret = RENEWAL_TOKEN_SECRET,
         max_concurrent = max_concurrent_per_ip,
         message_per_second = message_per_second,
         message_burst = message_burst_size,
@@ -293,6 +299,7 @@ path = "ks.db"
 [services.ais]
 [services.ais.server]
 token_ttl_secs = {token_ttl}
+renewal_token_secret = "{renewal_secret}"
 [services.ais.dependencies.signer]
 endpoint = "{ais_signer_endpoint}"
 timeout_seconds = 1
@@ -314,6 +321,7 @@ pid = "{pid}"
         shared = ACTRIX_SHARED_KEY,
         port = port,
         token_ttl = token_ttl_secs,
+        renewal_secret = RENEWAL_TOKEN_SECRET,
         ais_signer_endpoint = ais_signer_endpoint,
         pid = dir.join("actrix.pid").display()
     )
@@ -393,7 +401,6 @@ fn spawn_actrix(config: &Path, log_path: &Path) -> Child {
         .arg(config)
         .stdout(Stdio::from(log_file.try_clone().expect("dup log")))
         .stderr(Stdio::from(log_file))
-        .env("ACTRIX_TEST_NO_MFR_VERIFY", "1")
         .spawn()
         .expect("spawn actrix")
 }
@@ -402,9 +409,10 @@ async fn ensure_realm(sqlite_dir: &Path, realm_id: u32) {
     let db = platform::storage::db::Database::new(sqlite_dir)
         .await
         .expect("init db");
+    let secret_hash = platform::realm::hash_realm_secret(TEST_REALM_SECRET);
     db.execute(&format!(
         "INSERT OR IGNORE INTO realm (id, name, status, enabled, created_at, secret_current)
-         VALUES ({realm_id}, 'test-realm', 'Active', 1, strftime('%s','now'), '')"
+         VALUES ({realm_id}, 'test-realm', 'Active', 1, strftime('%s','now'), '{secret_hash}')"
     ))
     .await
     .expect("insert realm");
@@ -426,7 +434,7 @@ async fn ais_register_http(
         name,
         service_spec,
         acl,
-        None,
+        Some(TEST_REALM_SECRET),
     )
     .await
 }
@@ -453,9 +461,11 @@ async fn ais_register_http_with_secret(
         ws_address: None,
         manifest_raw: None,
         mfr_signature: None,
-        psk_token: None,
         target: None,
-        auth_mode: None,
+        auth_mode: Some(RegisterAuthMode::Linked as i32),
+        manufacturer_auth_signature: None,
+        manufacturer_auth_signed_at: None,
+        manufacturer_auth_nonce: None,
     };
     let client = reqwest::Client::new();
     let register_url = format!("{base_url}/ais/register");
@@ -806,14 +816,17 @@ async fn actrix_end_to_end_register_and_health() {
         ws_address: None,
         manifest_raw: None,
         mfr_signature: None,
-        psk_token: None,
         target: None,
-        auth_mode: None,
+        auth_mode: Some(RegisterAuthMode::Linked as i32),
+        manufacturer_auth_signature: None,
+        manufacturer_auth_signed_at: None,
+        manufacturer_auth_nonce: None,
     };
     let body = register_req.encode_to_vec();
     let register_url = format!("{base}/ais/register");
     let rsp_bytes = client
         .post(&register_url)
+        .header("x-actrix-realm-secret", TEST_REALM_SECRET)
         .body(body)
         .send()
         .await
@@ -1071,9 +1084,11 @@ async fn ais_register_rejects_non_preprovisioned_realm() {
         ws_address: None,
         manifest_raw: None,
         mfr_signature: None,
-        psk_token: None,
         target: None,
-        auth_mode: None,
+        auth_mode: Some(RegisterAuthMode::Linked as i32),
+        manufacturer_auth_signature: None,
+        manufacturer_auth_signed_at: None,
+        manufacturer_auth_nonce: None,
     };
 
     let rsp_bytes = client
@@ -1203,9 +1218,11 @@ async fn ais_register_enforces_realm_secret_when_configured() {
         ws_address: None,
         manifest_raw: None,
         mfr_signature: None,
-        psk_token: None,
         target: None,
-        auth_mode: None,
+        auth_mode: Some(RegisterAuthMode::Linked as i32),
+        manufacturer_auth_signature: None,
+        manufacturer_auth_signed_at: None,
+        manufacturer_auth_nonce: None,
     };
 
     // 1) 未携带 realm_secret，AIS HTTP 注册应被拒绝
@@ -1337,13 +1354,15 @@ async fn ais_health_and_endpoints_degrade_when_ks_dependency_is_unreachable() {
         ws_address: None,
         manifest_raw: None,
         mfr_signature: None,
-        psk_token: None,
         target: None,
-        auth_mode: None,
+        auth_mode: Some(RegisterAuthMode::Linked as i32),
+        manufacturer_auth_signature: None,
+        manufacturer_auth_signed_at: None,
+        manufacturer_auth_nonce: None,
     };
     let register_resp = client
         .post(format!("{base}/ais/register"))
-        .header("x-actrix-realm-secret", "")
+        .header("x-actrix-realm-secret", TEST_REALM_SECRET)
         .body(register_req.encode_to_vec())
         .send()
         .await
@@ -2094,124 +2113,6 @@ async fn signaling_rejects_expired_credential() {
     }
 
     graceful_shutdown(child);
-}
-
-#[tokio::test]
-#[serial]
-async fn signaling_credential_update_via_ws_returns_410() {
-    let harness = ActrixHarness::start(DEFAULT_TOKEN_TTL).await;
-    let port = harness.port;
-
-    let (mut write, mut read, ok) = ws_register(port, "acme", "cred-update-client", None).await;
-    let update_req = actr_protocol::ActrToSignaling {
-        source: ok.actr_id.clone(),
-        credential: ok.credential.clone(),
-        payload: Some(
-            actr_protocol::actr_to_signaling::Payload::CredentialUpdateRequest(
-                actr_protocol::CredentialUpdateRequest {
-                    actr_id: ok.actr_id.clone(),
-                },
-            ),
-        ),
-    };
-
-    send_envelope(
-        &mut write,
-        make_envelope(signaling_envelope::Flow::ActrToServer(update_req)),
-    )
-    .await;
-
-    let resp = recv_envelope(&mut read).await;
-    match resp.flow {
-        Some(signaling_envelope::Flow::ServerToActr(server_msg)) => match server_msg.payload {
-            Some(signaling_to_actr::Payload::Error(err)) => {
-                assert_eq!(
-                    err.code, 410,
-                    "credential update via WS should return 410 Gone"
-                );
-                assert!(
-                    err.message.contains("/ais/register"),
-                    "error should direct to AIS HTTP, got: {}",
-                    err.message,
-                );
-            }
-            other => panic!("expected 410 error, got {other:?}"),
-        },
-        other => panic!("unexpected flow {other:?}"),
-    }
-
-    let _ = write.send(WsMessage::Close(None)).await;
-    harness.shutdown();
-}
-
-#[tokio::test]
-#[serial]
-async fn signaling_credential_update_returns_410_and_connection_stays_healthy() {
-    let harness = ActrixHarness::start(DEFAULT_TOKEN_TTL).await;
-    let port = harness.port;
-
-    let (mut write, mut read, ok) = ws_register(port, "acme", "cred-mismatch-client", None).await;
-
-    // CredentialUpdateRequest 已迁移到 AIS HTTP，应返回 410
-    let update_req = actr_protocol::ActrToSignaling {
-        source: ok.actr_id.clone(),
-        credential: ok.credential.clone(),
-        payload: Some(
-            actr_protocol::actr_to_signaling::Payload::CredentialUpdateRequest(
-                actr_protocol::CredentialUpdateRequest {
-                    actr_id: ok.actr_id.clone(),
-                },
-            ),
-        ),
-    };
-
-    send_envelope(
-        &mut write,
-        make_envelope(signaling_envelope::Flow::ActrToServer(update_req)),
-    )
-    .await;
-
-    let resp = recv_envelope(&mut read).await;
-    match resp.flow {
-        Some(signaling_envelope::Flow::ServerToActr(server_msg)) => match server_msg.payload {
-            Some(signaling_to_actr::Payload::Error(err)) => {
-                assert_eq!(err.code, 410);
-            }
-            other => panic!("expected 410 error, got {other:?}"),
-        },
-        other => panic!("unexpected flow {other:?}"),
-    }
-
-    // 连接仍可用
-    let ping = actr_protocol::ActrToSignaling {
-        source: ok.actr_id.clone(),
-        credential: ok.credential.clone(),
-        payload: Some(actr_protocol::actr_to_signaling::Payload::Ping(
-            actr_protocol::Ping {
-                availability: 90,
-                mailbox_backlog: 0.0,
-                power_reserve: 80.0,
-                ..Default::default()
-            },
-        )),
-    };
-    send_envelope(
-        &mut write,
-        make_envelope(signaling_envelope::Flow::ActrToServer(ping)),
-    )
-    .await;
-
-    let pong = recv_envelope(&mut read).await;
-    match pong.flow {
-        Some(signaling_envelope::Flow::ServerToActr(server_msg)) => match server_msg.payload {
-            Some(signaling_to_actr::Payload::Pong(_)) => {}
-            other => panic!("expected pong after 410, got {other:?}"),
-        },
-        other => panic!("unexpected flow {other:?}"),
-    }
-
-    let _ = write.send(WsMessage::Close(None)).await;
-    harness.shutdown();
 }
 
 #[tokio::test]
@@ -3263,9 +3164,11 @@ async fn signaling_rejects_register_request_via_ws() {
         ws_address: None,
         manifest_raw: None,
         mfr_signature: None,
-        psk_token: None,
         target: None,
         auth_mode: None,
+        manufacturer_auth_signature: None,
+        manufacturer_auth_signed_at: None,
+        manufacturer_auth_nonce: None,
     };
     let env = make_envelope(signaling_envelope::Flow::PeerToServer(
         actr_protocol::PeerToSignaling {
