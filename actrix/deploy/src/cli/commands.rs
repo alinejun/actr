@@ -62,6 +62,51 @@ pub enum Commands {
         #[arg(long)]
         force_overwrite_unit: bool,
     },
+    /// Upgrade actrix to a new version (Release or local binary)
+    Update {
+        /// GitHub Release tag, e.g. v0.4.4
+        #[arg(long)]
+        tag: Option<String>,
+        /// Use the latest stable GitHub Release
+        #[arg(long)]
+        latest: bool,
+        /// Local pre-downloaded binary file
+        #[arg(long)]
+        binary_path: Option<PathBuf>,
+        /// SHA-256 sidecar for --binary-path (required unless --skip-verify)
+        #[arg(long)]
+        sha256_path: Option<PathBuf>,
+        /// Version label for --binary-path (e.g. v0.4.4)
+        #[arg(long)]
+        version: Option<String>,
+        /// Skip SHA-256 verification (not safe for production)
+        #[arg(long)]
+        skip_verify: bool,
+        /// Installation directory
+        #[arg(long, default_value = "/opt/actrix")]
+        install_dir: PathBuf,
+        /// Service to restart after switching (omit to switch without restarting)
+        #[arg(long)]
+        restart_service: Option<String>,
+    },
+    /// Roll bin/actrix back to a previously installed version
+    Rollback {
+        /// Version to roll back to (e.g. v0.4.3)
+        #[arg(long)]
+        to: String,
+        /// Installation directory
+        #[arg(long, default_value = "/opt/actrix")]
+        install_dir: PathBuf,
+        /// Service to restart after rolling back
+        #[arg(long)]
+        restart_service: Option<String>,
+    },
+    /// Show the active version, symlink target, and installed versions
+    Status {
+        /// Installation directory
+        #[arg(long, default_value = "/opt/actrix")]
+        install_dir: PathBuf,
+    },
     /// Uninstall the application
     Uninstall,
 }

@@ -63,7 +63,7 @@ pub fn install_release(artifact: &ResolvedArtifact, config: &InstallConfig) -> R
     println!("✅ Binary installed: {}", target.display());
 
     // Atomically switch the active symlink.
-    switch_active_symlink(config, &target)?;
+    super::releases::switch_active_symlink(config, &target)?;
 
     // Optional PATH symlink.
     if config.add_to_path {
@@ -90,51 +90,118 @@ pub fn install_release(artifact: &ResolvedArtifact, config: &InstallConfig) -> R
     Ok(())
 }
 
-/// Atomically switch `<install-dir>/bin/actrix` to point at `target`.
+/// Upgrade actrix to a new version, optionally restarting a service.
 ///
-/// Uses a temp symlink + `mv -Tf` so the active path is never missing and
-/// concurrent readers see either the old or new version, never a gap.
-fn switch_active_symlink(config: &InstallConfig, target: &Path) -> Result<()> {
-    let link = config.binary_path();
-    let tmp = config
-        .bin_dir()
-        .join(format!(".{}.tmp", config.binary_name));
+/// Resolves + verifies the artifact, installs it to `releases/<version>/`,
+/// switches `bin/actrix`, and — if `restart_service` is given — restarts that
+/// service and waits for it to become active. On restart failure the active
+/// symlink is rolled back to the previous version and the old service
+/// restarted. The systemd unit is never modified.
+pub fn update_service(
+    install_dir: PathBuf,
+    source: Source,
+    version: Option<String>,
+    sha256_path: Option<PathBuf>,
+    skip_verify: bool,
+    restart_service: Option<String>,
+) -> Result<()> {
+    let config = InstallConfig {
+        install_dir: install_dir.clone(),
+        binary_name: "actrix".to_string(),
+        add_to_path: false,
+    };
+    validate_supported_install_dir(&config.install_dir, "update")?;
 
-    // Remove any stale temp link.
-    let _ = Command::new("sudo")
-        .args(["rm", "-f", &tmp.to_string_lossy()])
-        .output();
+    let repo = std::env::var("ACTRIX_REPOSITORY").unwrap_or_else(|_| "Actrium/actr".to_string());
+    let token = std::env::var("GITHUB_TOKEN").ok();
+    let prev = super::releases::current_version(&config)?;
 
-    let out = Command::new("sudo")
-        .args([
-            "ln",
-            "-sfn",
-            &target.to_string_lossy(),
-            &tmp.to_string_lossy(),
-        ])
-        .output()?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "failed to create temp symlink: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+    let artifact = resolve(
+        &source,
+        version.as_deref(),
+        sha256_path.as_deref(),
+        skip_verify,
+        &repo,
+        token.as_deref(),
+    )?;
+    install_release(&artifact, &config)?;
+
+    if let Some(svc) = &restart_service {
+        let wait = super::service::health_wait_seconds();
+        if let Err(err) =
+            super::service::restart(svc).and_then(|_| super::service::wait_active(svc, wait))
+        {
+            println!("❌ Service did not come up: {err}");
+            match &prev {
+                Some(prev_ver) => {
+                    println!("⏪ Rolling back to {prev_ver} ...");
+                    let _ = super::releases::rollback_to(&config, prev_ver);
+                    let _ = super::service::restart(svc);
+                    anyhow::bail!(
+                        "update to {} failed: service '{svc}' did not become active; rolled back to {prev_ver}",
+                        artifact.version
+                    );
+                }
+                None => {
+                    anyhow::bail!(
+                        "update to {} failed: service '{svc}' did not become active and no previous version exists to roll back to",
+                        artifact.version
+                    );
+                }
+            }
+        } else {
+            println!("✅ Service '{svc}' active on version {}", artifact.version);
+        }
+    } else {
+        println!("ℹ️  No --restart-service given; symlink switched, service not restarted.");
     }
 
-    let out = Command::new("sudo")
-        .args(["mv", "-Tf", &tmp.to_string_lossy(), &link.to_string_lossy()])
-        .output()?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "failed to switch active symlink: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
+    Ok(())
+}
 
-    println!(
-        "✅ Active symlink: {} -> {}",
-        link.display(),
-        target.display()
-    );
+/// Roll the active symlink back to a previously installed version.
+pub fn rollback_command(
+    install_dir: PathBuf,
+    to_version: String,
+    restart_service: Option<String>,
+) -> Result<()> {
+    let config = InstallConfig {
+        install_dir,
+        binary_name: "actrix".to_string(),
+        add_to_path: false,
+    };
+    validate_supported_install_dir(&config.install_dir, "rollback")?;
+    super::releases::rollback_to(&config, &to_version)?;
+    if let Some(svc) = &restart_service {
+        super::service::restart(svc)?;
+        super::service::wait_active(svc, super::service::health_wait_seconds())?;
+        println!("✅ Service '{svc}' active on version {to_version}");
+    }
+    Ok(())
+}
+
+/// Print the active version, symlink target, and installed versions.
+pub fn status_command(install_dir: PathBuf) -> Result<()> {
+    let config = InstallConfig {
+        install_dir,
+        binary_name: "actrix".to_string(),
+        add_to_path: false,
+    };
+    println!("Install dir:    {}", config.install_dir.display());
+    match super::releases::current_version(&config)? {
+        Some(v) => println!("Current version: {v}"),
+        None => println!("Current version: (none — no active symlink)"),
+    }
+    match super::releases::current_target(&config)? {
+        Some(t) => println!("{} -> {}", config.binary_path().display(), t.display()),
+        None => println!("{} -> (missing)", config.binary_path().display()),
+    }
+    let versions = super::releases::list_versions(&config)?;
+    if versions.is_empty() {
+        println!("Installed versions: (none)");
+    } else {
+        println!("Installed versions: {}", versions.join(", "));
+    }
     Ok(())
 }
 
