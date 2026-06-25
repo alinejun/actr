@@ -722,6 +722,24 @@ assert_path2_taken() {
     success "Confirmed registration went through Path 2"
 }
 
+# Symmetric counterpart to assert_path2_taken: assert registration went through
+# Path 1 (published package, registry table lookup) and NOT Path 2. This catches
+# a silent Path 1 -> Path 2 fallback: if the registry lookup were to miss (e.g.
+# a target/manifest-hash matching regression), a published package with a
+# configured keychain would still succeed via Path 2 and the mode would stay
+# green without actually exercising Path 1. Path 1 logs "MFR table lookup
+# passed" (issuer.rs); Path 2 logs "...signature verification passed", so the
+# two markers are mutually exclusive.
+assert_path1_taken() {
+    if ! grep -q "MFR table lookup passed" "$LOG_DIR/actrix.log" 2>/dev/null; then
+        fail "Path 1 success marker not found in actrix.log (did registration fall through to Path 2, or was the registry lookup missed?)"
+    fi
+    if grep -q "signature verification passed" "$LOG_DIR/actrix.log" 2>/dev/null; then
+        fail "Path 2 marker found in actrix.log (should have taken Path 1; published package must not need a runner proof)"
+    fi
+    success "Confirmed registration went through Path 1"
+}
+
 stop_actrix() {
     if [ -n "$ACTRIX_PID" ] && kill -0 "$ACTRIX_PID" 2>/dev/null; then
         kill "$ACTRIX_PID" 2>/dev/null || true
@@ -762,9 +780,10 @@ mode_path1_with_keychain() {
     write_global_keychain_config "$home_dir" "$SERVICE_KEYCHAIN"
     start_server_isolated "$home_dir" "$hyper_dir" "server.log"
     # A published package succeeds via Path 1 regardless of whether a keychain
-    # is configured — this only proves the keychain config does not break Path 1.
-    # It does NOT prove the request carried a runner proof (Path 1 ignores it).
+    # is configured. Assert Path 1 was actually taken (not a silent fallback to
+    # Path 2, which would also succeed here because the keychain holds key A).
     expect_server_started "server.log"
+    assert_path1_taken
     stop_server
 }
 
@@ -794,8 +813,12 @@ mode_path2_no_proof() {
     assert_no_keychain_config "$home_dir"
     start_server_isolated "$home_dir" "$hyper_dir" "server.log"
     expect_server_rejected "server.log"
+    # The no-proof rejection is deterministic: with no keychain the runtime
+    # sends manifest_raw + mfr_signature but no manufacturer_auth_* triple, so
+    # Path 2 must emit this marker before rejecting. Make it a hard assertion so
+    # a rejection at the wrong stage (e.g. attach-time) cannot pass this mode.
     if ! grep -q "unpublished package requires" "$LOG_DIR/actrix.log" 2>/dev/null; then
-        warn "Expected 'unpublished package requires ...' marker in actrix.log"
+        fail "Expected 'unpublished package requires ...' rejection marker in actrix.log (Path 2 no-proof rejection did not fire as expected)"
     fi
     stop_server
 }
@@ -897,9 +920,11 @@ echo "Actrix binary: $ACTRIX_BIN"
 render_runtime_configs
 build_local_actr_cli
 build_local_actrix
-# Path 2 modes need the debug-level Path 2 verification marker in actrix.log.
+# Modes that assert which path was taken need the debug-level Path 1 / Path 2
+# verification markers ("MFR table lookup passed" / "...signature verification
+# passed") in actrix.log.
 case "$MODE" in
-    path2-happy|rotation) export ACTRIX_RUST_LOG="info,actrix::observability=debug" ;;
+    path1-with-keychain|path2-happy|rotation) export ACTRIX_RUST_LOG="info,actrix::observability=debug" ;;
 esac
 start_actrix
 login_admin
