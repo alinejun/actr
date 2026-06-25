@@ -61,6 +61,15 @@ pub enum Commands {
         /// Overwrite an existing systemd unit (discards hardening)
         #[arg(long)]
         force_overwrite_unit: bool,
+        /// WorkingDirectory for the unit (default: install-dir).
+        ///
+        /// Set this when the actrix config uses relative paths (certs, db,
+        /// sqlite) that resolve against a directory other than the install
+        /// dir, e.g. `--working-directory /opt/actr-project/actrix`. Relative
+        /// runtime paths from the config are resolved against this directory
+        /// and added to ReadWritePaths.
+        #[arg(long)]
+        working_directory: Option<PathBuf>,
     },
     /// Upgrade actrix to a new version (Release or local binary)
     Update {

@@ -21,7 +21,7 @@ After=network.target
 Type=simple
 User={{SERVICE_USER}}
 Group={{SERVICE_GROUP}}
-WorkingDirectory={{INSTALL_DIR}}
+WorkingDirectory={{WORKING_DIRECTORY}}
 ExecStart={{INSTALL_DIR}}/bin/actrix --config {{CONFIG_PATH}}
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
@@ -52,6 +52,31 @@ struct RuntimeConfig {
     sqlite_path: Option<String>,
     #[serde(default)]
     bind: RuntimeBindConfig,
+    #[serde(default)]
+    services: RuntimeServicesConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RuntimeServicesConfig {
+    #[serde(default)]
+    signer: Option<RuntimeSignerConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RuntimeSignerConfig {
+    #[serde(default)]
+    storage: Option<RuntimeSignerStorageConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RuntimeSignerStorageConfig {
+    #[serde(default)]
+    sqlite: Option<RuntimeSqlitePathConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RuntimeSqlitePathConfig {
+    path: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -74,6 +99,7 @@ pub struct SystemdServiceTemplate {
     install_config: InstallConfig,
     config_path: std::path::PathBuf,
     service_name: String,
+    working_directory: PathBuf,
 }
 
 impl SystemdServiceTemplate {
@@ -81,11 +107,13 @@ impl SystemdServiceTemplate {
         install_config: InstallConfig,
         config_path: std::path::PathBuf,
         service_name: String,
+        working_directory: PathBuf,
     ) -> Self {
         Self {
             install_config,
             config_path,
             service_name,
+            working_directory,
         }
     }
 
@@ -155,6 +183,7 @@ impl SystemdServiceTemplate {
             .install_dir
             .to_string_lossy()
             .to_string();
+        let working_dir_str = self.working_directory.to_string_lossy().to_string();
         let config_path_str = self.config_path.to_string_lossy().to_string();
         let read_write_paths = self.collect_read_write_paths().join(" ");
         let capability_block = if self.requires_low_port_capability() {
@@ -169,6 +198,7 @@ impl SystemdServiceTemplate {
         placeholders.insert("SERVICE_USER".to_string(), service_user.to_string());
         placeholders.insert("SERVICE_GROUP".to_string(), service_group.to_string());
         placeholders.insert("INSTALL_DIR".to_string(), install_dir_str);
+        placeholders.insert("WORKING_DIRECTORY".to_string(), working_dir_str);
         placeholders.insert("CONFIG_PATH".to_string(), config_path_str);
         placeholders.insert("READ_WRITE_PATHS".to_string(), read_write_paths);
         placeholders.insert("CAPABILITY_BLOCK".to_string(), capability_block.to_string());
@@ -297,7 +327,9 @@ impl SystemdServiceTemplate {
         if path.is_absolute() {
             path
         } else {
-            self.install_config.install_dir.join(path)
+            // Relative runtime paths (certs, db, sqlite) resolve against the
+            // unit's WorkingDirectory, not the install dir.
+            self.working_directory.join(path)
         }
     }
 
@@ -329,6 +361,21 @@ impl SystemdServiceTemplate {
                         if let Some(parent) = resolved.parent() {
                             paths.insert(parent.to_string_lossy().to_string());
                         }
+                    }
+
+                    // services.signer.storage.sqlite.path
+                    if let Some(sqlite_path) = runtime_cfg
+                        .services
+                        .signer
+                        .as_ref()
+                        .and_then(|s| s.storage.as_ref())
+                        .and_then(|st| st.sqlite.as_ref())
+                        .and_then(|sq| sq.path.as_deref())
+                        .map(str::trim)
+                        .filter(|p| !p.is_empty())
+                    {
+                        let resolved = self.resolve_runtime_path(sqlite_path);
+                        paths.insert(resolved.to_string_lossy().to_string());
                     }
                 }
                 Err(err) => {

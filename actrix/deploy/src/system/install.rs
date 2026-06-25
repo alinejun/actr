@@ -134,7 +134,7 @@ pub fn update_service(
             println!("❌ Service did not come up: {err}");
             match &prev {
                 Some(prev_ver) => {
-                    println!("⏪ Rolling back to {prev_ver} ...");
+                    // rollback_to() logs the rollback step itself.
                     let _ = super::releases::rollback_to(&config, prev_ver);
                     let _ = super::service::restart(svc);
                     anyhow::bail!(
@@ -220,6 +220,7 @@ pub struct ServiceArgs {
     pub user: Option<String>,
     pub group: Option<String>,
     pub force_overwrite_unit: bool,
+    pub working_directory: Option<PathBuf>,
 }
 
 /// Deploy application as systemd service.
@@ -252,6 +253,12 @@ pub fn install_systemd_service(args: ServiceArgs) -> Result<()> {
     let service_name = configure_service_name(args.service_name)?;
     let (service_user, service_group) = configure_service_user(args.user, args.group)?;
 
+    // WorkingDirectory defaults to the install dir; override with --working-directory
+    // when the actrix config resolves relative paths (certs/db/sqlite) elsewhere.
+    let working_directory = args
+        .working_directory
+        .unwrap_or_else(|| install_config.install_dir.clone());
+
     // Verify critical files exist before creating service
     verify_deployment_files(&install_config, &config_path)?;
 
@@ -259,7 +266,8 @@ pub fn install_systemd_service(args: ServiceArgs) -> Result<()> {
     configure_firewall_step(&config_path)?;
 
     // Create systemd service
-    let service_template = SystemdServiceTemplate::new(install_config, config_path, service_name);
+    let service_template =
+        SystemdServiceTemplate::new(install_config, config_path, service_name, working_directory);
     service_template.generate_service_file(
         &service_user,
         &service_group,
@@ -739,15 +747,42 @@ fn create_directory_with_permissions(path: &Path, mode: u32) -> Result<()> {
 }
 
 fn copy_file_with_sudo(src: &Path, dst: &Path) -> Result<()> {
-    let output = Command::new("sudo")
-        .args(["cp", &src.to_string_lossy(), &dst.to_string_lossy()])
-        .output()?;
+    // Copy to a temp file beside the destination, then atomically rename it
+    // into place. A plain `cp` over a currently-running executable fails with
+    // ETXTBSY ("Text file busy"); `mv` (rename) over a running binary is
+    // allowed because the running process retains the old inode. This also
+    // makes the replacement atomic for concurrent readers.
+    let parent = dst.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = dst.file_name().and_then(|n| n.to_str()).unwrap_or("binary");
+    let tmp = parent.join(format!(".{file_name}.deploy-tmp-{}", std::process::id()));
 
-    if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
+    let cp = Command::new("sudo")
+        .args(["cp", &src.to_string_lossy(), &tmp.to_string_lossy()])
+        .output()?;
+    if !cp.status.success() {
+        let error = String::from_utf8_lossy(&cp.stderr);
+        let _ = Command::new("sudo")
+            .args(["rm", "-f", &tmp.to_string_lossy()])
+            .output();
         anyhow::bail!(
             "Failed to copy file from {} to {}: {}",
             src.display(),
+            dst.display(),
+            error
+        );
+    }
+
+    let mv = Command::new("sudo")
+        .args(["mv", "-f", &tmp.to_string_lossy(), &dst.to_string_lossy()])
+        .output()?;
+    if !mv.status.success() {
+        let error = String::from_utf8_lossy(&mv.stderr);
+        let _ = Command::new("sudo")
+            .args(["rm", "-f", &tmp.to_string_lossy()])
+            .output();
+        anyhow::bail!(
+            "Failed to move file into place {} -> {}: {}",
+            tmp.display(),
             dst.display(),
             error
         );

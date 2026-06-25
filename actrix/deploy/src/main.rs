@@ -54,6 +54,7 @@ fn main() -> Result<()> {
             user,
             group,
             force_overwrite_unit,
+            working_directory,
         }) => system::install_systemd_service(system::ServiceArgs {
             service_name,
             install_dir,
@@ -61,6 +62,7 @@ fn main() -> Result<()> {
             user,
             group,
             force_overwrite_unit,
+            working_directory,
         }),
         Some(Commands::Update {
             tag,
