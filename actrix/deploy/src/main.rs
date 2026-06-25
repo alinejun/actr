@@ -3,8 +3,11 @@
 use anyhow::Result;
 use clap::Parser;
 
+mod artifact;
+mod checksum;
 mod cli;
 mod config;
+mod release;
 mod system;
 mod tpl;
 
