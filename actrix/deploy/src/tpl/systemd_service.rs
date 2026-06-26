@@ -363,6 +363,12 @@ impl SystemdServiceTemplate {
                 .to_string_lossy()
                 .to_string(),
         );
+        paths.insert(
+            self.working_directory
+                .join("logs")
+                .to_string_lossy()
+                .to_string(),
+        );
 
         match std::fs::read_to_string(&self.config_path) {
             Ok(config_text) => match toml::from_str::<RuntimeConfig>(&config_text) {
@@ -482,7 +488,9 @@ fn assert_single_line(label: &str, value: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::assert_single_line;
+    use super::{SystemdServiceTemplate, assert_single_line};
+    use crate::config::InstallConfig;
+    use std::path::PathBuf;
 
     #[test]
     fn single_line_rejects_newlines_and_control_chars() {
@@ -490,5 +498,24 @@ mod tests {
         assert!(assert_single_line("x", "a\nb").is_err());
         assert!(assert_single_line("x", "a\rb").is_err());
         assert!(assert_single_line("x", "a\tb").is_err());
+    }
+
+    #[test]
+    fn read_write_paths_include_default_pid_logs_dir() {
+        let install_dir = PathBuf::from("/opt/actrix-test");
+        let working_directory = PathBuf::from("/opt/actr-project/actrix");
+        let template = SystemdServiceTemplate::new(
+            InstallConfig {
+                install_dir,
+                binary_name: "actrix".to_string(),
+                add_to_path: false,
+            },
+            PathBuf::from("/no/such/config.toml"),
+            "actrix-test".to_string(),
+            working_directory.clone(),
+        );
+
+        let paths = template.collect_read_write_paths();
+        assert!(paths.contains(&working_directory.join("logs").to_string_lossy().to_string()));
     }
 }
