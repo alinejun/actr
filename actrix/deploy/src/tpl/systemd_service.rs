@@ -186,8 +186,8 @@ impl SystemdServiceTemplate {
             .to_string();
         let working_dir_str = self.working_directory.to_string_lossy().to_string();
         let config_path_str = self.config_path.to_string_lossy().to_string();
-        let read_write_paths = self.collect_read_write_paths().join(" ");
-        let read_only_paths = self.collect_read_only_paths().join(" ");
+        let read_write_paths = self.collect_read_write_paths()?.join(" ");
+        let read_only_paths = self.collect_read_only_paths()?.join(" ");
         let capability_block = if self.requires_low_port_capability() {
             "# Allow binding privileged ports (<1024) while running as non-root\nAmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE"
         } else {
@@ -353,22 +353,24 @@ impl SystemdServiceTemplate {
         }
     }
 
-    fn collect_read_write_paths(&self) -> Vec<String> {
+    fn collect_read_write_paths(&self) -> Result<Vec<String>> {
         let mut paths = BTreeSet::new();
-        paths.insert(self.install_config.logs_dir().to_string_lossy().to_string());
-        paths.insert(self.install_config.db_dir().to_string_lossy().to_string());
-        paths.insert(
-            self.install_config
-                .shared_dir()
-                .to_string_lossy()
-                .to_string(),
-        );
-        paths.insert(
-            self.working_directory
-                .join("logs")
-                .to_string_lossy()
-                .to_string(),
-        );
+        self.add_read_write_path(
+            &mut paths,
+            self.install_config.logs_dir(),
+            "install logs dir",
+        )?;
+        self.add_read_write_path(&mut paths, self.install_config.db_dir(), "install db dir")?;
+        self.add_read_write_path(
+            &mut paths,
+            self.install_config.shared_dir(),
+            "install shared dir",
+        )?;
+        self.add_read_write_path(
+            &mut paths,
+            self.working_directory.join("logs"),
+            "working directory logs dir",
+        )?;
 
         match std::fs::read_to_string(&self.config_path) {
             Ok(config_text) => match toml::from_str::<RuntimeConfig>(&config_text) {
@@ -377,7 +379,7 @@ impl SystemdServiceTemplate {
                         && !sqlite_path.trim().is_empty()
                     {
                         let resolved = self.resolve_runtime_path(sqlite_path.trim());
-                        paths.insert(resolved.to_string_lossy().to_string());
+                        self.add_read_write_path(&mut paths, resolved, "config sqlite_path")?;
                     }
 
                     if let Some(pid_path) = runtime_cfg.pid
@@ -385,7 +387,11 @@ impl SystemdServiceTemplate {
                     {
                         let resolved = self.resolve_runtime_path(pid_path.trim());
                         if let Some(parent) = resolved.parent() {
-                            paths.insert(parent.to_string_lossy().to_string());
+                            self.add_read_write_path(
+                                &mut paths,
+                                parent.to_path_buf(),
+                                "config pid parent",
+                            )?;
                         }
                     }
 
@@ -401,7 +407,11 @@ impl SystemdServiceTemplate {
                         .filter(|p| !p.is_empty())
                     {
                         let resolved = self.resolve_runtime_path(sqlite_path);
-                        paths.insert(resolved.to_string_lossy().to_string());
+                        self.add_read_write_path(
+                            &mut paths,
+                            resolved,
+                            "config signer sqlite path",
+                        )?;
                     }
                 }
                 Err(err) => {
@@ -419,17 +429,82 @@ impl SystemdServiceTemplate {
             }
         }
 
-        paths.into_iter().collect()
+        Ok(paths.into_iter().collect())
     }
 
-    fn collect_read_only_paths(&self) -> Vec<String> {
-        vec![
-            self.install_config.bin_dir().to_string_lossy().to_string(),
-            self.install_config
-                .releases_dir()
-                .to_string_lossy()
-                .to_string(),
-        ]
+    fn add_read_write_path(
+        &self,
+        paths: &mut BTreeSet<String>,
+        path: PathBuf,
+        label: &str,
+    ) -> Result<()> {
+        self.validate_unit_path(&path, label)?;
+        self.validate_runtime_write_path_scope(&path, label)?;
+        paths.insert(path.to_string_lossy().to_string());
+        Ok(())
+    }
+
+    fn collect_read_only_paths(&self) -> Result<Vec<String>> {
+        let paths = vec![
+            self.install_config.bin_dir(),
+            self.install_config.releases_dir(),
+        ];
+        for path in &paths {
+            self.validate_unit_path(path, "read-only path")?;
+        }
+        Ok(paths
+            .into_iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect())
+    }
+
+    fn validate_unit_path(&self, path: &Path, label: &str) -> Result<()> {
+        if !path.is_absolute() {
+            anyhow::bail!(
+                "invalid {label} for systemd unit: {} is not absolute",
+                path.display()
+            );
+        }
+        if path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        }) {
+            anyhow::bail!(
+                "invalid {label} for systemd unit: {} contains '.' or '..'",
+                path.display()
+            );
+        }
+        let text = path.to_string_lossy();
+        if text.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            anyhow::bail!(
+                "invalid {label} for systemd unit: {} contains whitespace or control characters",
+                path.display()
+            );
+        }
+        if has_existing_symlink_component(path)? {
+            anyhow::bail!(
+                "invalid {label} for systemd unit: {} contains an existing symlink component",
+                path.display()
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_runtime_write_path_scope(&self, path: &Path, label: &str) -> Result<()> {
+        let normalized = normalize_path(path);
+        let install_dir = normalize_path(&self.install_config.install_dir);
+        let working_directory = normalize_path(&self.working_directory);
+        if normalized.starts_with(&install_dir) || normalized.starts_with(&working_directory) {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "refusing {label} {} in ReadWritePaths: path must stay under install-dir ({}) or working-directory ({})",
+            path.display(),
+            self.install_config.install_dir.display(),
+            self.working_directory.display()
+        );
     }
 
     fn requires_low_port_capability(&self) -> bool {
@@ -486,10 +561,42 @@ fn assert_single_line(label: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => normalized.push(Path::new("/")),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
+}
+
+fn has_existing_symlink_component(path: &Path) -> Result<bool> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        match std::fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() => return Ok(true),
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SystemdServiceTemplate, assert_single_line};
     use crate::config::InstallConfig;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::path::PathBuf;
 
     #[test]
@@ -515,7 +622,97 @@ mod tests {
             working_directory.clone(),
         );
 
-        let paths = template.collect_read_write_paths();
+        let paths = template.collect_read_write_paths().unwrap();
         assert!(paths.contains(&working_directory.join("logs").to_string_lossy().to_string()));
+    }
+
+    fn template_with_config(config_text: &str) -> (SystemdServiceTemplate, PathBuf) {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "actrix-deploy-systemd-path-test-{}-{unique}",
+                std::process::id(),
+            ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config_path = dir.join("config.toml");
+        std::fs::write(&config_path, config_text).unwrap();
+
+        let template = SystemdServiceTemplate::new(
+            InstallConfig {
+                install_dir: dir.join("install"),
+                binary_name: "actrix".to_string(),
+                add_to_path: false,
+            },
+            config_path,
+            "actrix-test".to_string(),
+            dir.join("work"),
+        );
+        (template, dir)
+    }
+
+    #[test]
+    fn read_write_paths_allow_config_paths_under_allowed_roots() {
+        let (template, dir) = template_with_config(
+            r#"
+sqlite_path = "database"
+pid = "logs/actrix.pid"
+
+[services.signer.storage.sqlite]
+path = "database/signer.db"
+"#,
+        );
+
+        let paths = template.collect_read_write_paths().unwrap();
+        assert!(paths.contains(&dir.join("work/database").to_string_lossy().to_string()));
+        assert!(paths.contains(&dir.join("work/logs").to_string_lossy().to_string()));
+        assert!(
+            paths.contains(
+                &dir.join("work/database/signer.db")
+                    .to_string_lossy()
+                    .to_string()
+            )
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn read_write_paths_reject_config_paths_outside_allowed_roots() {
+        let (template, dir) = template_with_config(r#"sqlite_path = "/etc""#);
+
+        assert!(template.collect_read_write_paths().is_err());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn read_write_paths_reject_parent_refs_and_whitespace() {
+        let (parent_template, parent_dir) = template_with_config(r#"sqlite_path = "../escape""#);
+        assert!(parent_template.collect_read_write_paths().is_err());
+        let _ = std::fs::remove_dir_all(parent_dir);
+
+        let (space_template, space_dir) = template_with_config(r#"sqlite_path = "my db""#);
+        assert!(space_template.collect_read_write_paths().is_err());
+        let _ = std::fs::remove_dir_all(space_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_write_paths_reject_symlink_components_under_allowed_roots() {
+        let (template, dir) = template_with_config(r#"sqlite_path = "database""#);
+        let outside = dir.join("outside");
+        std::fs::create_dir_all(&template.working_directory).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, template.working_directory.join("database")).unwrap();
+
+        assert!(template.collect_read_write_paths().is_err());
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
