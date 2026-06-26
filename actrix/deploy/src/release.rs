@@ -152,7 +152,9 @@ fn curl_download(url: &str, token: Option<&str>, accept: Option<&str>, dest: &Pa
 /// argv / `ps` / `/proc`.
 fn curl_exec(args: &[String], stdin_config: Option<&str>) -> Result<std::process::Output> {
     let mut cmd = Command::new("curl");
-    cmd.args(args);
+    cmd.args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
     if stdin_config.is_some() {
         cmd.stdin(std::process::Stdio::piped());
     }
@@ -337,5 +339,25 @@ mod tests {
 
         assert!(args.contains(&"-sSLf".to_string()));
         assert!(!args.contains(&"--progress-bar".to_string()));
+    }
+
+    #[test]
+    fn text_exec_captures_stdout() {
+        let path = std::env::temp_dir().join(format!(
+            "actrix-deploy-curl-text-test-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, r#"{"ok":true}"#).unwrap();
+
+        let output = curl_exec(
+            &["-sSLf".into(), format!("file://{}", path.display())],
+            None,
+        )
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), r#"{"ok":true}"#);
+
+        let _ = std::fs::remove_file(path);
     }
 }
