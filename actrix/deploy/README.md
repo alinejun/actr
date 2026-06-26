@@ -197,6 +197,8 @@ sudo deploy uninstall --install-dir /opt/actrix --service-name actrix2
 - 同一 version 内容不可变：已安装的 version 如果 checksum 不同，`install`/`update` 都会拒绝覆盖。
 - `update`/`rollback` 必须指定 `--restart-service`，确保活跃软链、运行进程和健康检查处在同一个发布动作里。
 
+TODO: GitHub Release downloads currently verify SHA-256 integrity only. They do not verify publisher authenticity. Before enabling unattended auto-upgrade, add deploy-side publisher signature verification with Sigstore/cosign or GPG.
+
 ## 环境变量
 
 | 变量 | 作用 |
