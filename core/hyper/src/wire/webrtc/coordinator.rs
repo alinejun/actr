@@ -731,6 +731,7 @@ impl WebRtcCoordinator {
             );
         }
 
+        self.clear_peer_recovering(target, session_id, reason).await;
         self.notify_removed_peer_idle_if_needed(target, session_id, &state, reason)
             .await;
 
@@ -6326,6 +6327,40 @@ mod tests {
         assert!(
             !coordinator.peers.read().await.contains_key(&peer_id),
             "cancelled cleanup should remove peer state"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_cleanup_clears_recovery_guard_for_removed_session() {
+        let local_id = test_actor_id(1);
+        let peer_id = test_actor_id(99);
+        let coordinator = new_test_coordinator(local_id);
+        let session_id =
+            insert_pending_offer_peer(&coordinator, peer_id.clone(), "current-exchange").await;
+
+        coordinator
+            .mark_peer_recovering(&peer_id, session_id, "test recovery guard")
+            .await;
+        assert!(
+            coordinator
+                .network_recovering_peers
+                .read()
+                .await
+                .contains_key(&peer_id),
+            "test setup should mark peer as recovering"
+        );
+
+        coordinator
+            .cleanup_cancelled_connection(&peer_id, "test recovery guard cleanup")
+            .await;
+
+        assert!(
+            !coordinator
+                .network_recovering_peers
+                .read()
+                .await
+                .contains_key(&peer_id),
+            "cancelled cleanup should clear the removed session's recovery guard"
         );
     }
 
