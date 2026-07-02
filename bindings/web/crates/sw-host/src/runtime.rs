@@ -2384,11 +2384,12 @@ impl SwRuntime {
             && !self.pending_rpcs.contains_key(&envelope.request_id)
         {
             log::warn!(
-                "[SW] rpc.orphan_response_dropped: late response request_id={} peer={} channel={} stream_id={} with no pending request; dropping",
+                "[SW] rpc.orphan_response_dropped: envelope marked Response has no pending request request_id={} peer={} channel={} stream_id={} route_key={}; dropping (late reply or mislabeled request)",
                 envelope.request_id,
                 peer_id,
                 channel_id,
-                payload.stream_id
+                payload.stream_id,
+                envelope.route_key,
             );
             return Ok(());
         }

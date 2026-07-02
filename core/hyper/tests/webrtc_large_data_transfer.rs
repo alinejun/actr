@@ -16,7 +16,7 @@ use actr_hyper::outbound::PeerGate;
 use actr_hyper::test_support::{TestHarness, make_actor_id, spawn_response_receiver};
 use actr_hyper::wire::webrtc::WebRtcCoordinator;
 use actr_protocol::prost::Message as ProstMessage;
-use actr_protocol::{ActrId, RpcEnvelope};
+use actr_protocol::{ActrId, Direction, RpcEnvelope};
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -92,6 +92,7 @@ fn spawn_data_echo_responder(
                                 route_key: "response".to_string(),
                                 payload: request.payload.clone(),
                                 timeout_ms: 0,
+                                direction: Some(Direction::Response as i32),
                                 ..Default::default()
                             };
 

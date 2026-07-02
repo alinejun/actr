@@ -88,8 +88,12 @@ impl WebRtcGate {
     /// - `mailbox`: Mailbox for enqueueing requests
     ///
     /// # Behavior
-    /// - If request_id exists in pending_requests: Response → wake up waiting caller
-    /// - If request_id doesn't exist: Request → enqueue to Mailbox
+    /// Routes on the sender-set `direction` field (legacy peers without it
+    /// fall back to pending-map inference):
+    /// - `Request`: enqueue to Mailbox, skipping the pending lookup.
+    /// - `Response`: wake the waiting caller if a pending entry exists;
+    ///   otherwise drop as an orphan late response — never enqueue (fix for #255).
+    /// - `Unspecified`: pending hit ⇒ Response wake, miss ⇒ Request enqueue.
     async fn handle_envelope(
         envelope: RpcEnvelope,
         from_bytes: Vec<u8>,
@@ -150,7 +154,8 @@ impl WebRtcGate {
                     tracing::warn!(
                         request_id = %request_id,
                         peer = %peer,
-                        "rpc.orphan_response_dropped: late RPC response with no pending request; dropping"
+                        route_key = %envelope.route_key,
+                        "rpc.orphan_response_dropped: envelope marked Response has no pending request; dropping (late reply or peer-mislabeled request)"
                     );
                 }
                 Direction::Unspecified => {

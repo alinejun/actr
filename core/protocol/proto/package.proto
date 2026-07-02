@@ -24,6 +24,12 @@ message MetadataEntry {
 // inference, preserving backward compatibility.
 //
 // Senders MUST set this on every envelope they construct.
+//
+// Receivers trust this label without cross-checking pending state, so a
+// mislabeled envelope is routed by its label: a request stamped Response is
+// dropped if its request_id isn't pending, and a response stamped Request is
+// enqueued as a new call. The orphan-drop log includes route_key to make
+// such mislabels diagnosable.
 enum Direction {
     DIRECTION_UNSPECIFIED = 0;  // Default / legacy peer — route via fallback inference
     DIRECTION_REQUEST = 1;      // A new RPC call addressed to a handler

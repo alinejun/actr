@@ -228,7 +228,8 @@ impl WebSocketGate {
                     tracing::warn!(
                         request_id = %request_id,
                         peer = %peer,
-                        "rpc.orphan_response_dropped: late WS RPC response with no pending request; dropping"
+                        route_key = %envelope.route_key,
+                        "rpc.orphan_response_dropped: envelope marked Response has no pending request; dropping (late reply or peer-mislabeled request)"
                     );
                 }
                 Direction::Unspecified => {

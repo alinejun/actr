@@ -16,7 +16,7 @@ use actr_hyper::test_support::{
 use actr_hyper::transport::{ConnectionEvent, ConnectionState};
 use actr_hyper::wire::webrtc::{HookCallback, HookEvent, WebRtcCoordinator};
 use actr_protocol::prost::Message as ProstMessage;
-use actr_protocol::{ActrError, ActrId, DataStream, PayloadType, RpcEnvelope};
+use actr_protocol::{ActrError, ActrId, DataStream, Direction, PayloadType, RpcEnvelope};
 use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -188,6 +188,7 @@ fn spawn_rpc_router(
                         route_key: "response".to_string(),
                         payload: envelope.payload.clone(),
                         timeout_ms: 0,
+                        direction: Some(Direction::Response as i32),
                         ..Default::default()
                     };
 
